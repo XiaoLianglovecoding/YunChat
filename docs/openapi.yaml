@@ -1,0 +1,341 @@
+openapi: 3.1.0
+info:
+  title: LinkNest IM API
+  version: 0.1.0
+  description: Architecture-first contract. Business routes return NOT_IMPLEMENTED during M0.
+servers:
+  - url: http://localhost:18080
+tags:
+  - name: System
+  - name: Auth
+  - name: Users
+  - name: Contacts
+  - name: Conversations
+  - name: Groups
+  - name: Uploads
+paths:
+  /healthz:
+    get:
+      tags: [System]
+      operationId: health
+      responses:
+        "200":
+          description: Process is alive
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Envelope" }
+  /readyz:
+    get:
+      tags: [System]
+      operationId: ready
+      responses:
+        "200":
+          description: Scaffold readiness response
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Envelope" }
+  /api/v1/auth/register:
+    post:
+      tags: [Auth]
+      operationId: register
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/RegisterRequest" }
+      responses:
+        "201": { $ref: "#/components/responses/Success" }
+        "501": { $ref: "#/components/responses/NotImplemented" }
+  /api/v1/auth/login:
+    post:
+      tags: [Auth]
+      operationId: login
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/LoginRequest" }
+      responses:
+        "200": { $ref: "#/components/responses/Success" }
+        "501": { $ref: "#/components/responses/NotImplemented" }
+  /api/v1/auth/refresh:
+    post:
+      tags: [Auth]
+      operationId: refreshToken
+      responses:
+        "200": { $ref: "#/components/responses/Success" }
+        "501": { $ref: "#/components/responses/NotImplemented" }
+  /api/v1/auth/logout:
+    post:
+      tags: [Auth]
+      security: [{ bearerAuth: [] }]
+      operationId: logout
+      responses:
+        "200": { $ref: "#/components/responses/Success" }
+        "501": { $ref: "#/components/responses/NotImplemented" }
+  /api/v1/users/me:
+    get:
+      tags: [Users]
+      security: [{ bearerAuth: [] }]
+      operationId: getCurrentUser
+      responses:
+        "200": { $ref: "#/components/responses/Success" }
+        "501": { $ref: "#/components/responses/NotImplemented" }
+    patch:
+      tags: [Users]
+      security: [{ bearerAuth: [] }]
+      operationId: updateCurrentUser
+      responses:
+        "200": { $ref: "#/components/responses/Success" }
+        "501": { $ref: "#/components/responses/NotImplemented" }
+  /api/v1/users/{id}:
+    get:
+      tags: [Users]
+      security: [{ bearerAuth: [] }]
+      operationId: getUser
+      parameters:
+        - $ref: "#/components/parameters/ID"
+      responses:
+        "200": { $ref: "#/components/responses/Success" }
+        "501": { $ref: "#/components/responses/NotImplemented" }
+  /api/v1/friend-requests:
+    get:
+      tags: [Contacts]
+      security: [{ bearerAuth: [] }]
+      operationId: listFriendRequests
+      responses:
+        "200": { $ref: "#/components/responses/Success" }
+        "501": { $ref: "#/components/responses/NotImplemented" }
+    post:
+      tags: [Contacts]
+      security: [{ bearerAuth: [] }]
+      operationId: createFriendRequest
+      responses:
+        "201": { $ref: "#/components/responses/Success" }
+        "501": { $ref: "#/components/responses/NotImplemented" }
+  /api/v1/friend-requests/{id}/accept:
+    post:
+      tags: [Contacts]
+      security: [{ bearerAuth: [] }]
+      operationId: acceptFriendRequest
+      parameters:
+        - $ref: "#/components/parameters/ID"
+      responses:
+        "200": { $ref: "#/components/responses/Success" }
+        "501": { $ref: "#/components/responses/NotImplemented" }
+  /api/v1/friend-requests/{id}/reject:
+    post:
+      tags: [Contacts]
+      security: [{ bearerAuth: [] }]
+      operationId: rejectFriendRequest
+      parameters:
+        - $ref: "#/components/parameters/ID"
+      responses:
+        "200": { $ref: "#/components/responses/Success" }
+        "501": { $ref: "#/components/responses/NotImplemented" }
+  /api/v1/contacts:
+    get:
+      tags: [Contacts]
+      security: [{ bearerAuth: [] }]
+      operationId: listContacts
+      parameters:
+        - $ref: "#/components/parameters/Cursor"
+        - $ref: "#/components/parameters/Limit"
+      responses:
+        "200": { $ref: "#/components/responses/Success" }
+        "501": { $ref: "#/components/responses/NotImplemented" }
+  /api/v1/contacts/{id}:
+    delete:
+      tags: [Contacts]
+      security: [{ bearerAuth: [] }]
+      operationId: deleteContact
+      parameters:
+        - $ref: "#/components/parameters/ID"
+      responses:
+        "200": { $ref: "#/components/responses/Success" }
+        "501": { $ref: "#/components/responses/NotImplemented" }
+  /api/v1/blocks/{user_id}:
+    put:
+      tags: [Contacts]
+      security: [{ bearerAuth: [] }]
+      operationId: blockUser
+      parameters:
+        - $ref: "#/components/parameters/UserID"
+      responses:
+        "200": { $ref: "#/components/responses/Success" }
+        "501": { $ref: "#/components/responses/NotImplemented" }
+    delete:
+      tags: [Contacts]
+      security: [{ bearerAuth: [] }]
+      operationId: unblockUser
+      parameters:
+        - $ref: "#/components/parameters/UserID"
+      responses:
+        "200": { $ref: "#/components/responses/Success" }
+        "501": { $ref: "#/components/responses/NotImplemented" }
+  /api/v1/conversations:
+    get:
+      tags: [Conversations]
+      security: [{ bearerAuth: [] }]
+      operationId: listConversations
+      parameters:
+        - $ref: "#/components/parameters/Cursor"
+        - $ref: "#/components/parameters/Limit"
+      responses:
+        "200": { $ref: "#/components/responses/Success" }
+        "501": { $ref: "#/components/responses/NotImplemented" }
+    post:
+      tags: [Conversations]
+      security: [{ bearerAuth: [] }]
+      operationId: createDirectConversation
+      responses:
+        "201": { $ref: "#/components/responses/Success" }
+        "501": { $ref: "#/components/responses/NotImplemented" }
+  /api/v1/conversations/{id}/messages:
+    get:
+      tags: [Conversations]
+      security: [{ bearerAuth: [] }]
+      operationId: listMessages
+      parameters:
+        - $ref: "#/components/parameters/ID"
+        - name: before_seq
+          in: query
+          schema: { type: integer, format: int64, minimum: 1 }
+        - $ref: "#/components/parameters/Limit"
+      responses:
+        "200": { $ref: "#/components/responses/Success" }
+        "501": { $ref: "#/components/responses/NotImplemented" }
+  /api/v1/conversations/{id}/read:
+    post:
+      tags: [Conversations]
+      security: [{ bearerAuth: [] }]
+      operationId: markConversationRead
+      parameters:
+        - $ref: "#/components/parameters/ID"
+      responses:
+        "200": { $ref: "#/components/responses/Success" }
+        "501": { $ref: "#/components/responses/NotImplemented" }
+  /api/v1/messages/{id}/recall:
+    post:
+      tags: [Conversations]
+      security: [{ bearerAuth: [] }]
+      operationId: recallMessage
+      parameters:
+        - $ref: "#/components/parameters/ID"
+      responses:
+        "200": { $ref: "#/components/responses/Success" }
+        "501": { $ref: "#/components/responses/NotImplemented" }
+  /api/v1/groups:
+    post:
+      tags: [Groups]
+      security: [{ bearerAuth: [] }]
+      operationId: createGroup
+      responses:
+        "201": { $ref: "#/components/responses/Success" }
+        "501": { $ref: "#/components/responses/NotImplemented" }
+  /api/v1/groups/{id}:
+    patch:
+      tags: [Groups]
+      security: [{ bearerAuth: [] }]
+      operationId: updateGroup
+      parameters:
+        - $ref: "#/components/parameters/ID"
+      responses:
+        "200": { $ref: "#/components/responses/Success" }
+        "501": { $ref: "#/components/responses/NotImplemented" }
+  /api/v1/groups/{id}/members:
+    get:
+      tags: [Groups]
+      security: [{ bearerAuth: [] }]
+      operationId: listGroupMembers
+      parameters:
+        - $ref: "#/components/parameters/ID"
+      responses:
+        "200": { $ref: "#/components/responses/Success" }
+        "501": { $ref: "#/components/responses/NotImplemented" }
+    post:
+      tags: [Groups]
+      security: [{ bearerAuth: [] }]
+      operationId: addGroupMembers
+      parameters:
+        - $ref: "#/components/parameters/ID"
+      responses:
+        "200": { $ref: "#/components/responses/Success" }
+        "501": { $ref: "#/components/responses/NotImplemented" }
+  /api/v1/uploads/presign:
+    post:
+      tags: [Uploads]
+      security: [{ bearerAuth: [] }]
+      operationId: createUploadIntent
+      responses:
+        "200": { $ref: "#/components/responses/Success" }
+        "501": { $ref: "#/components/responses/NotImplemented" }
+components:
+  securitySchemes:
+    bearerAuth:
+      type: http
+      scheme: bearer
+      bearerFormat: JWT
+  parameters:
+    ID:
+      name: id
+      in: path
+      required: true
+      schema: { type: string, pattern: "^[0-9]+$" }
+    UserID:
+      name: user_id
+      in: path
+      required: true
+      schema: { type: string, pattern: "^[0-9]+$" }
+    Cursor:
+      name: cursor
+      in: query
+      schema: { type: string }
+    Limit:
+      name: limit
+      in: query
+      schema: { type: integer, minimum: 1, maximum: 100, default: 20 }
+  responses:
+    Success:
+      description: Successful response
+      content:
+        application/json:
+          schema: { $ref: "#/components/schemas/Envelope" }
+    NotImplemented:
+      description: Reserved route in the architecture scaffold
+      content:
+        application/json:
+          schema: { $ref: "#/components/schemas/ErrorEnvelope" }
+  schemas:
+    Envelope:
+      type: object
+      required: [code, message, request_id]
+      properties:
+        code: { type: string, examples: [OK] }
+        message: { type: string }
+        data: {}
+        request_id: { type: string }
+    ErrorEnvelope:
+      allOf:
+        - $ref: "#/components/schemas/Envelope"
+        - type: object
+          properties:
+            code: { type: string, examples: [NOT_IMPLEMENTED] }
+    RegisterRequest:
+      type: object
+      required: [username, nickname, password]
+      properties:
+        username: { type: string, minLength: 4, maxLength: 32 }
+        nickname: { type: string, minLength: 1, maxLength: 30 }
+        email: { type: string, format: email }
+        password: { type: string, minLength: 8, maxLength: 72 }
+    LoginRequest:
+      type: object
+      required: [login, password, deviceKey, deviceName, platform]
+      properties:
+        login: { type: string }
+        password: { type: string }
+        deviceKey: { type: string }
+        deviceName: { type: string }
+        platform: { type: string, enum: [web, ios, android, desktop] }
+

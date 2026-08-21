@@ -1,0 +1,52 @@
+app:
+  name: linknest-im
+  env: local
+
+server:
+  host: 0.0.0.0
+  port: 18080
+  websocket_path: /ws
+  read_timeout: 10s
+  write_timeout: 15s
+  idle_timeout: 60s
+  shutdown_timeout: 10s
+  allowed_origins:
+    - http://localhost:5173
+
+mysql:
+  host: 127.0.0.1
+  port: 3306
+  database: linknest
+  user: linknest
+  password: linknest_dev
+  max_open_connections: 30
+  max_idle_connections: 10
+  connection_max_lifetime: 30m
+
+redis:
+  addr: 127.0.0.1:6379
+  password: linknest_redis_dev
+  database: 0
+
+rabbitmq:
+  url: amqp://linknest:linknest_dev@127.0.0.1:5672/
+  exchange: linknest.events
+
+jwt:
+  issuer: linknest-im
+  secret: replace-with-at-least-32-random-characters
+  access_ttl: 2h
+  refresh_ttl: 168h
+
+id:
+  worker_id: 1
+
+storage:
+  provider: local
+  local_dir: ./data/uploads
+  max_upload_bytes: 52428800
+
+log:
+  level: debug
+  format: console
+

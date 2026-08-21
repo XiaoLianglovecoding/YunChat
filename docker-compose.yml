@@ -1,0 +1,107 @@
+name: linknest-im
+
+services:
+  mysql:
+    image: mysql:8.4
+    environment:
+      MYSQL_DATABASE: ${MYSQL_DATABASE:-linknest}
+      MYSQL_USER: ${MYSQL_USER:-linknest}
+      MYSQL_PASSWORD: ${MYSQL_PASSWORD:-linknest_dev}
+      MYSQL_ROOT_PASSWORD: ${MYSQL_ROOT_PASSWORD:-root_dev_only}
+      TZ: Asia/Shanghai
+    command:
+      - --character-set-server=utf8mb4
+      - --collation-server=utf8mb4_0900_ai_ci
+    ports:
+      - "${MYSQL_PORT:-3306}:3306"
+    volumes:
+      - mysql_data:/var/lib/mysql
+      - ./deploy/mysql/init:/docker-entrypoint-initdb.d:ro
+    healthcheck:
+      test: ["CMD", "mysqladmin", "ping", "-h", "localhost", "-uroot", "-p${MYSQL_ROOT_PASSWORD:-root_dev_only}"]
+      interval: 5s
+      timeout: 5s
+      retries: 20
+    restart: unless-stopped
+
+  redis:
+    image: redis:7.2-alpine
+    command: ["redis-server", "--appendonly", "yes", "--requirepass", "${REDIS_PASSWORD:-linknest_redis_dev}"]
+    ports:
+      - "6379:6379"
+    volumes:
+      - redis_data:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "-a", "${REDIS_PASSWORD:-linknest_redis_dev}", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+    restart: unless-stopped
+
+  rabbitmq:
+    image: rabbitmq:3.13-management-alpine
+    environment:
+      RABBITMQ_DEFAULT_USER: ${RABBITMQ_USER:-linknest}
+      RABBITMQ_DEFAULT_PASS: ${RABBITMQ_PASSWORD:-linknest_dev}
+    ports:
+      - "5672:5672"
+      - "15672:15672"
+    volumes:
+      - rabbitmq_data:/var/lib/rabbitmq
+    healthcheck:
+      test: ["CMD", "rabbitmq-diagnostics", "-q", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 12
+    restart: unless-stopped
+
+  api:
+    profiles: ["app"]
+    build:
+      context: ./backend
+      target: api
+    environment:
+      LINKNEST_SERVER_PORT: 18080
+      LINKNEST_MYSQL_HOST: mysql
+      LINKNEST_REDIS_ADDR: redis:6379
+      LINKNEST_RABBITMQ_URL: amqp://${RABBITMQ_USER:-linknest}:${RABBITMQ_PASSWORD:-linknest_dev}@rabbitmq:5672/
+      LINKNEST_JWT_SECRET: ${JWT_SECRET:-replace-with-at-least-32-random-characters}
+    ports:
+      - "${BACKEND_PORT:-18080}:18080"
+    depends_on:
+      mysql:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      rabbitmq:
+        condition: service_healthy
+
+  worker:
+    profiles: ["app"]
+    build:
+      context: ./backend
+      target: worker
+    environment:
+      LINKNEST_MYSQL_HOST: mysql
+      LINKNEST_REDIS_ADDR: redis:6379
+      LINKNEST_RABBITMQ_URL: amqp://${RABBITMQ_USER:-linknest}:${RABBITMQ_PASSWORD:-linknest_dev}@rabbitmq:5672/
+    depends_on:
+      mysql:
+        condition: service_healthy
+      rabbitmq:
+        condition: service_healthy
+
+  web:
+    profiles: ["app"]
+    build:
+      context: ./frontend
+    ports:
+      - "${FRONTEND_PORT:-5173}:80"
+    depends_on:
+      - api
+
+volumes:
+  mysql_data:
+  redis_data:
+  rabbitmq_data:
+
