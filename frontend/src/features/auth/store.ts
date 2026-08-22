@@ -8,6 +8,7 @@ type AuthState = {
   accessToken: string | null;
   refreshToken: string | null;
   setSession: (user: User, accessToken: string, refreshToken: string) => void;
+	setUser: (user: User) => void;
   clearSession: () => void;
 };
 
@@ -18,6 +19,7 @@ export const useAuthStore = create<AuthState>()(
       accessToken: null,
       refreshToken: null,
       setSession: (user, accessToken, refreshToken) => set({ user, accessToken, refreshToken }),
+	  setUser: (user) => set({ user }),
       clearSession: () => set({ user: null, accessToken: null, refreshToken: null }),
     }),
     {
@@ -26,4 +28,3 @@ export const useAuthStore = create<AuthState>()(
     },
   ),
 );
-

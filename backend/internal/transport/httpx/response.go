@@ -33,6 +33,14 @@ func NotImplemented(ctx *gin.Context, useCase string) {
 	})
 }
 
+func TooManyRequests(ctx *gin.Context) {
+	ctx.JSON(http.StatusTooManyRequests, Envelope{Code: "RATE_LIMITED", Message: "too many requests", RequestID: requestID(ctx)})
+}
+
+func ServiceUnavailable(ctx *gin.Context) {
+	ctx.JSON(http.StatusServiceUnavailable, Envelope{Code: "SERVICE_UNAVAILABLE", Message: "authentication protection is temporarily unavailable", RequestID: requestID(ctx)})
+}
+
 func Error(ctx *gin.Context, err error) {
 	status, code, message := classify(err)
 	ctx.JSON(status, Envelope{Code: code, Message: message, RequestID: requestID(ctx)})
@@ -41,15 +49,19 @@ func Error(ctx *gin.Context, err error) {
 func classify(err error) (int, string, string) {
 	switch {
 	case errors.Is(err, domain.ErrInvalidArgument):
-		return http.StatusBadRequest, "INVALID_ARGUMENT", err.Error()
+		return http.StatusBadRequest, "INVALID_ARGUMENT", "request is invalid"
 	case errors.Is(err, domain.ErrUnauthorized):
 		return http.StatusUnauthorized, "UNAUTHORIZED", "authentication is required"
+	case errors.Is(err, domain.ErrInvalidCredentials):
+		return http.StatusUnauthorized, "INVALID_CREDENTIALS", "login credentials are invalid"
 	case errors.Is(err, domain.ErrForbidden):
 		return http.StatusForbidden, "FORBIDDEN", "operation is not allowed"
 	case errors.Is(err, domain.ErrNotFound):
 		return http.StatusNotFound, "NOT_FOUND", "resource was not found"
 	case errors.Is(err, domain.ErrConflict):
 		return http.StatusConflict, "CONFLICT", err.Error()
+	case errors.Is(err, domain.ErrRateLimited):
+		return http.StatusTooManyRequests, "RATE_LIMITED", "too many requests"
 	case errors.Is(err, domain.ErrNotImplemented):
 		return http.StatusNotImplemented, "NOT_IMPLEMENTED", err.Error()
 	default:

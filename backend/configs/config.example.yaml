@@ -15,7 +15,7 @@ server:
 
 mysql:
   host: 127.0.0.1
-  port: 3306
+  port: 13306
   database: linknest
   user: linknest
   password: linknest_dev
@@ -24,12 +24,12 @@ mysql:
   connection_max_lifetime: 30m
 
 redis:
-  addr: 127.0.0.1:6379
+  addr: 127.0.0.1:16379
   password: linknest_redis_dev
   database: 0
 
 rabbitmq:
-  url: amqp://linknest:linknest_dev@127.0.0.1:5672/
+  url: amqp://linknest:linknest_dev@127.0.0.1:25672/
   exchange: linknest.events
 
 jwt:
@@ -37,6 +37,12 @@ jwt:
   secret: replace-with-at-least-32-random-characters
   access_ttl: 2h
   refresh_ttl: 168h
+
+auth:
+  register_limit: 5
+  register_window: 1h
+  login_limit: 10
+  login_window: 1m
 
 id:
   worker_id: 1
@@ -49,4 +55,3 @@ storage:
 log:
   level: debug
   format: console
-

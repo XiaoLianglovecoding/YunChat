@@ -28,7 +28,7 @@ services:
     image: redis:7.2-alpine
     command: ["redis-server", "--appendonly", "yes", "--requirepass", "${REDIS_PASSWORD:-linknest_redis_dev}"]
     ports:
-      - "6379:6379"
+      - "${REDIS_PORT:-6379}:6379"
     volumes:
       - redis_data:/data
     healthcheck:
@@ -44,8 +44,8 @@ services:
       RABBITMQ_DEFAULT_USER: ${RABBITMQ_USER:-linknest}
       RABBITMQ_DEFAULT_PASS: ${RABBITMQ_PASSWORD:-linknest_dev}
     ports:
-      - "5672:5672"
-      - "15672:15672"
+      - "${RABBITMQ_PORT:-5672}:5672"
+      - "${RABBITMQ_MANAGEMENT_PORT:-15672}:15672"
     volumes:
       - rabbitmq_data:/var/lib/rabbitmq
     healthcheck:
@@ -104,4 +104,3 @@ volumes:
   mysql_data:
   redis_data:
   rabbitmq_data:
-

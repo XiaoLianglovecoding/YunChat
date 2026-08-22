@@ -12,6 +12,12 @@ type Store struct {
 	db *sql.DB
 }
 
+type executor interface {
+	ExecContext(context.Context, string, ...any) (sql.Result, error)
+	QueryContext(context.Context, string, ...any) (*sql.Rows, error)
+	QueryRowContext(context.Context, string, ...any) *sql.Row
+}
+
 func New(db *sql.DB) *Store {
 	return &Store{db: db}
 }
@@ -34,11 +40,7 @@ func (store *Store) WithinTransaction(ctx context.Context, fn func(context.Conte
 	return nil
 }
 
-func (store *Store) Executor(ctx context.Context) interface {
-	ExecContext(context.Context, string, ...any) (sql.Result, error)
-	QueryContext(context.Context, string, ...any) (*sql.Rows, error)
-	QueryRowContext(context.Context, string, ...any) *sql.Row
-} {
+func (store *Store) Executor(ctx context.Context) executor {
 	if tx, ok := ctx.Value(transactionKey{}).(*sql.Tx); ok {
 		return tx
 	}

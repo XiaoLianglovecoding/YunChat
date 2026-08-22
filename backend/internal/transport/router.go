@@ -12,7 +12,7 @@ import (
 	"go.uber.org/zap"
 )
 
-func NewRouter(cfg config.Config, log *zap.Logger, tokens *token.Manager, services application.Services, hub *realtime.Hub) *gin.Engine {
+func NewRouter(cfg config.Config, log *zap.Logger, tokens *token.Manager, sessions middleware.SessionValidator, limiter middleware.RateLimiter, services application.Services, hub *realtime.Hub) *gin.Engine {
 	if cfg.App.Env == "production" {
 		gin.SetMode(gin.ReleaseMode)
 	}
@@ -27,17 +27,20 @@ func NewRouter(cfg config.Config, log *zap.Logger, tokens *token.Manager, servic
 	api := router.Group("/api/v1")
 	auth := api.Group("/auth")
 	{
-		auth.POST("/register", handlers.Todo("auth.register"))
-		auth.POST("/login", handlers.Todo("auth.login"))
-		auth.POST("/refresh", handlers.Todo("auth.refresh"))
+		auth.POST("/register", middleware.RateLimit(limiter, "register", cfg.Auth.RegisterLimit, cfg.Auth.RegisterWindow), handlers.Register)
+		auth.POST("/login", middleware.RateLimit(limiter, "login", cfg.Auth.LoginLimit, cfg.Auth.LoginWindow), handlers.Login)
+		auth.POST("/refresh", handlers.Refresh)
 	}
 
 	protected := api.Group("")
-	protected.Use(middleware.RequireAuth(tokens))
+	protected.Use(middleware.RequireAuth(tokens, sessions))
 	{
-		protected.POST("/auth/logout", handlers.Todo("auth.logout"))
-		protected.GET("/users/me", handlers.Todo("user.get_me"))
-		protected.PATCH("/users/me", handlers.Todo("user.update_me"))
+		protected.POST("/auth/logout", handlers.Logout)
+		protected.POST("/auth/change-password", handlers.ChangePassword)
+		protected.GET("/users/me", handlers.GetMe)
+		protected.PATCH("/users/me", handlers.UpdateMe)
+		protected.GET("/users/me/settings", handlers.GetSettings)
+		protected.PATCH("/users/me/settings", handlers.UpdateSettings)
 		protected.GET("/users/:id", handlers.Todo("user.get_public_profile"))
 
 		protected.GET("/friend-requests", handlers.Todo("contact.list_requests"))

@@ -10,10 +10,14 @@ import (
 	"os/signal"
 	"strconv"
 	"syscall"
+	"time"
 
 	"github.com/XiaoLianglovecoding/linknest-im/backend/internal/application"
 	"github.com/XiaoLianglovecoding/linknest-im/backend/internal/config"
+	"github.com/XiaoLianglovecoding/linknest-im/backend/internal/platform/cache"
+	"github.com/XiaoLianglovecoding/linknest-im/backend/internal/platform/database"
 	"github.com/XiaoLianglovecoding/linknest-im/backend/internal/platform/logger"
+	"github.com/XiaoLianglovecoding/linknest-im/backend/internal/platform/store/mysqlstore"
 	"github.com/XiaoLianglovecoding/linknest-im/backend/internal/realtime"
 	"github.com/XiaoLianglovecoding/linknest-im/backend/internal/transport"
 	"github.com/XiaoLianglovecoding/linknest-im/backend/pkg/id"
@@ -39,16 +43,36 @@ func main() {
 	if err != nil {
 		log.Fatal("initialize id generator", zap.Error(err))
 	}
-	_ = idGenerator // TODO(linknest): inject into concrete application services.
-
 	tokens, err := token.NewManager(cfg.JWT.Issuer, cfg.JWT.Secret, cfg.JWT.AccessTTL)
 	if err != nil {
 		log.Fatal("initialize token manager", zap.Error(err))
 	}
+	databaseContext, databaseCancel := context.WithTimeout(context.Background(), 10*time.Second)
+	db, err := database.OpenMySQL(databaseContext, cfg.MySQL)
+	databaseCancel()
+	if err != nil {
+		log.Fatal("initialize mysql", zap.Error(err))
+	}
+	defer db.Close()
+	accounts := mysqlstore.New(db)
+	redisContext, redisCancel := context.WithTimeout(context.Background(), 5*time.Second)
+	redisClient, err := cache.OpenRedis(redisContext, cfg.Redis)
+	redisCancel()
+	if err != nil {
+		log.Fatal("initialize redis", zap.Error(err))
+	}
+	defer redisClient.Close()
+	rateLimiter := cache.NewRateLimiter(redisClient)
+	services, err := application.NewServices(application.Dependencies{
+		Accounts: accounts, IDs: idGenerator, Tokens: tokens, RefreshTTL: cfg.JWT.RefreshTTL,
+		LoginLimiter: rateLimiter, LoginLimit: cfg.Auth.LoginLimit, LoginWindow: cfg.Auth.LoginWindow,
+	})
+	if err != nil {
+		log.Fatal("initialize application services", zap.Error(err))
+	}
 
 	hub := realtime.NewHub()
-	services := application.NewTODO()
-	router := transport.NewRouter(cfg, log, tokens, services, hub)
+	router := transport.NewRouter(cfg, log, tokens, accounts, rateLimiter, services, hub)
 	server := &http.Server{
 		Addr:         net.JoinHostPort(cfg.Server.Host, strconv.Itoa(cfg.Server.Port)),
 		Handler:      router,

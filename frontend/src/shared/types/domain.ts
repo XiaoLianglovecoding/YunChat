@@ -4,9 +4,25 @@ export type User = {
   id: ID;
   username: string;
   nickname: string;
+	  email: string;
+	  phone?: string;
   avatarUrl: string;
   bio: string;
+	  status: number;
   lastSeenAt: string | null;
+	  createdAt: string;
+	  updatedAt: string;
+};
+
+export type UserSettings = {
+	userId: ID;
+	locale: "zh-CN" | "en-US";
+	theme: "system" | "light" | "dark";
+	notificationEnabled: boolean;
+	messagePreviewEnabled: boolean;
+	extra?: Record<string, unknown>;
+	createdAt: string;
+	updatedAt: string;
 };
 
 export type ConversationType = "direct" | "group";
@@ -47,4 +63,3 @@ export type CursorPage<T> = {
   items: T[];
   nextCursor: string | null;
 };
-

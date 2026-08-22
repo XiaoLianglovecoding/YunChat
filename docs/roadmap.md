@@ -14,13 +14,14 @@ rg -n "TODO\(linknest\)" backend frontend
 - [x] 配置、日志、ID、JWT、密码、响应等公共工具
 - [x] Docker Compose 与 GitHub Actions
 
-## M1 · 身份与账号
+## M1 · 身份与账号（已完成）
 
-- [ ] 注册、登录和 bcrypt 密码校验
-- [ ] Access/Refresh Token 轮换与吊销
-- [ ] 多设备会话管理
-- [ ] 用户资料与设置
-- [ ] 登录和注册限流
+- [x] 注册、登录和 bcrypt 密码校验
+- [x] Access/Refresh Token 轮换与吊销
+- [x] 单设备会话管理（新设备登录会吊销旧设备）
+- [x] 用户资料与设置
+- [x] 登录和注册限流
+- [x] 账号服务与仓储单元测试
 
 ## M2 · 社交关系
 
@@ -54,4 +55,3 @@ rg -n "TODO\(linknest\)" backend frontend
 - [ ] 限流、熔断和优雅降级
 - [ ] 消息链路压测和容量报告
 - [ ] 线上部署、备份恢复和演示截图
-

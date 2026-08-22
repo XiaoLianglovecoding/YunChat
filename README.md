@@ -8,7 +8,7 @@
 
 </div>
 
-> 当前阶段是 **architecture-first scaffold**：工程边界、协议、公共工具、数据表和部署入口已建立，聊天业务逻辑使用 `TODO` 或 `501 Not Implemented` 明确占位。
+> 当前阶段是 **M1 可运行版本**：身份、账号、会话、资料和设置流程已经打通；社交关系、聊天、群组和媒体业务仍使用 `TODO` 或 `501 Not Implemented` 明确占位。
 
 ## 为什么这样设计
 
@@ -41,7 +41,7 @@ linknest-im/
 │   ├── cmd/api/                 # HTTP + WebSocket 进程
 │   ├── cmd/worker/              # Outbox 与异步任务进程
 │   ├── internal/domain/         # 领域实体、枚举和仓储端口
-│   ├── internal/application/    # 用例接口与 TODO 服务
+│   ├── internal/application/    # 身份账号用例与后续 TODO 服务
 │   ├── internal/platform/       # MySQL、Redis、MQ、日志
 │   ├── internal/realtime/       # WS 协议和连接中心
 │   ├── internal/transport/      # Gin 路由、中间件、Handler
@@ -66,7 +66,7 @@ linknest-im/
 Copy-Item .env.example .env
 Copy-Item backend/configs/config.example.yaml backend/configs/config.local.yaml
 
-# 基础设施
+# 基础设施（端口已避开常见的其他本地项目，可在 .env 中修改）
 docker compose up -d mysql redis rabbitmq
 
 # API

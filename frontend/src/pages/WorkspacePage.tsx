@@ -1,4 +1,5 @@
 import { useMemo, useState } from "react";
+import { useNavigate } from "react-router-dom";
 import {
   BellOff,
   CheckCheck,
@@ -35,6 +36,7 @@ const navigation = [
 ];
 
 export function WorkspacePage() {
+	const navigate = useNavigate();
   const [query, setQuery] = useState("");
   const [draft, setDraft] = useState("");
   const [mobileListOpen, setMobileListOpen] = useState(false);
@@ -59,7 +61,7 @@ export function WorkspacePage() {
           ))}
         </nav>
         <div className="rail-bottom">
-          <button className="icon-button" type="button" title="设置"><Settings2 size={20} /></button>
+          <button className="icon-button" type="button" title="设置" onClick={() => navigate("/account")}><Settings2 size={20} /></button>
           <Avatar initials="我" color="ink" size="small" online />
         </div>
       </aside>

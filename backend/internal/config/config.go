@@ -21,6 +21,7 @@ type Config struct {
 	ID       ID       `yaml:"id"`
 	Storage  Storage  `yaml:"storage"`
 	Log      Log      `yaml:"log"`
+	Auth     Auth     `yaml:"auth"`
 }
 
 type App struct {
@@ -83,6 +84,13 @@ type Log struct {
 	Format string `yaml:"format"`
 }
 
+type Auth struct {
+	RegisterLimit  int           `yaml:"register_limit"`
+	RegisterWindow time.Duration `yaml:"register_window"`
+	LoginLimit     int           `yaml:"login_limit"`
+	LoginWindow    time.Duration `yaml:"login_window"`
+}
+
 func Default() Config {
 	return Config{
 		App: App{Name: "linknest-im", Env: "local"},
@@ -106,6 +114,7 @@ func Default() Config {
 		ID:       ID{WorkerID: 1},
 		Storage:  Storage{Provider: "local", LocalDir: "./data/uploads", MaxUploadBytes: 50 << 20},
 		Log:      Log{Level: "debug", Format: "console"},
+		Auth:     Auth{RegisterLimit: 5, RegisterWindow: time.Hour, LoginLimit: 10, LoginWindow: time.Minute},
 	}
 }
 
@@ -153,6 +162,9 @@ func (cfg Config) Validate() error {
 	}
 	if cfg.JWT.AccessTTL <= 0 || cfg.JWT.RefreshTTL <= 0 {
 		problems = append(problems, "jwt token TTL values must be positive")
+	}
+	if cfg.Auth.RegisterLimit <= 0 || cfg.Auth.RegisterWindow <= 0 || cfg.Auth.LoginLimit <= 0 || cfg.Auth.LoginWindow <= 0 {
+		problems = append(problems, "auth rate limit values must be positive")
 	}
 	if len(problems) > 0 {
 		return fmt.Errorf("invalid configuration: %s", strings.Join(problems, "; "))

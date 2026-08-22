@@ -2,6 +2,7 @@ package validate
 
 import (
 	"errors"
+	"net/mail"
 	"regexp"
 	"strings"
 	"unicode/utf8"
@@ -20,6 +21,18 @@ func Nickname(value string) error {
 	length := utf8.RuneCountInString(strings.TrimSpace(value))
 	if length < 1 || length > 30 {
 		return errors.New("nickname must contain 1-30 characters")
+	}
+	return nil
+}
+
+func Email(value string) error {
+	value = strings.TrimSpace(value)
+	if value == "" || len(value) > 254 {
+		return errors.New("email must contain 1-254 characters")
+	}
+	address, err := mail.ParseAddress(value)
+	if err != nil || address.Address != value || !strings.Contains(value, "@") {
+		return errors.New("email format is invalid")
 	}
 	return nil
 }

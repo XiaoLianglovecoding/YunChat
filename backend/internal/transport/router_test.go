@@ -20,7 +20,7 @@ func TestHealthEndpoint(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	router := NewRouter(cfg, zap.NewNop(), tokens, application.NewTODO(), realtime.NewHub())
+	router := NewRouter(cfg, zap.NewNop(), tokens, nil, nil, application.NewTODO(), realtime.NewHub())
 
 	request := httptest.NewRequest(http.MethodGet, "/healthz", nil)
 	response := httptest.NewRecorder()
@@ -34,17 +34,17 @@ func TestHealthEndpoint(t *testing.T) {
 	}
 }
 
-func TestBusinessEndpointReturnsNotImplemented(t *testing.T) {
+func TestRegisterRejectsAnEmptyBody(t *testing.T) {
 	cfg := config.Default()
 	cfg.JWT.Secret = "01234567890123456789012345678901"
 	tokens, _ := token.NewManager(cfg.JWT.Issuer, cfg.JWT.Secret, time.Hour)
-	router := NewRouter(cfg, zap.NewNop(), tokens, application.NewTODO(), realtime.NewHub())
+	router := NewRouter(cfg, zap.NewNop(), tokens, nil, nil, application.NewTODO(), realtime.NewHub())
 
 	request := httptest.NewRequest(http.MethodPost, "/api/v1/auth/register", nil)
 	response := httptest.NewRecorder()
 	router.ServeHTTP(response, request)
 
-	if response.Code != http.StatusNotImplemented {
-		t.Fatalf("status = %d, want 501; body=%s", response.Code, response.Body.String())
+	if response.Code != http.StatusBadRequest {
+		t.Fatalf("status = %d, want 400; body=%s", response.Code, response.Body.String())
 	}
 }

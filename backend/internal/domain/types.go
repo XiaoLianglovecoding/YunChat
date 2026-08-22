@@ -54,17 +54,28 @@ const (
 )
 
 type User struct {
-	ID         UserID
-	Username   string
-	Email      string
-	Phone      string
-	Nickname   string
-	AvatarURL  string
-	Bio        string
-	Status     UserStatus
-	LastSeenAt *time.Time
-	CreatedAt  time.Time
-	UpdatedAt  time.Time
+	ID         UserID     `json:"id"`
+	Username   string     `json:"username"`
+	Email      string     `json:"email"`
+	Phone      string     `json:"phone,omitempty"`
+	Nickname   string     `json:"nickname"`
+	AvatarURL  string     `json:"avatar_url"`
+	Bio        string     `json:"bio"`
+	Status     UserStatus `json:"status"`
+	LastSeenAt *time.Time `json:"last_seen_at,omitempty"`
+	CreatedAt  time.Time  `json:"created_at"`
+	UpdatedAt  time.Time  `json:"updated_at"`
+}
+
+type UserSettings struct {
+	UserID                UserID          `json:"user_id"`
+	Locale                string          `json:"locale"`
+	Theme                 string          `json:"theme"`
+	NotificationEnabled   bool            `json:"notification_enabled"`
+	MessagePreviewEnabled bool            `json:"message_preview_enabled"`
+	Extra                 json.RawMessage `json:"extra,omitempty"`
+	CreatedAt             time.Time       `json:"created_at"`
+	UpdatedAt             time.Time       `json:"updated_at"`
 }
 
 type Device struct {
@@ -75,6 +86,15 @@ type Device struct {
 	Platform     string
 	LastActiveAt time.Time
 	RevokedAt    *time.Time
+}
+
+type Session struct {
+	TokenID   uint64
+	UserID    UserID
+	DeviceID  DeviceID
+	FamilyID  uint64
+	TokenHash []byte
+	ExpiresAt time.Time
 }
 
 type FriendRequest struct {

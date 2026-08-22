@@ -7,10 +7,13 @@ import (
 )
 
 type RegisterCommand struct {
-	Username string
-	Email    string
-	Password string
-	Nickname string
+	Username   string
+	Email      string
+	Password   string
+	Nickname   string
+	DeviceKey  string
+	DeviceName string
+	Platform   string
 }
 
 type LoginCommand struct {
@@ -22,9 +25,14 @@ type LoginCommand struct {
 }
 
 type TokenPair struct {
-	AccessToken  string
-	RefreshToken string
-	ExpiresIn    int64
+	AccessToken  string `json:"access_token"`
+	RefreshToken string `json:"refresh_token"`
+	ExpiresIn    int64  `json:"expires_in"`
+}
+
+type AuthSession struct {
+	User domain.User `json:"user"`
+	TokenPair
 }
 
 type SendFriendRequestCommand struct {
@@ -54,10 +62,35 @@ type SendMessageCommand struct {
 }
 
 type AuthUseCase interface {
-	Register(ctx context.Context, cmd RegisterCommand) (domain.User, error)
-	Login(ctx context.Context, cmd LoginCommand) (TokenPair, error)
-	Refresh(ctx context.Context, refreshToken string) (TokenPair, error)
+	Register(ctx context.Context, cmd RegisterCommand) (AuthSession, error)
+	Login(ctx context.Context, cmd LoginCommand) (AuthSession, error)
+	Refresh(ctx context.Context, refreshToken string) (AuthSession, error)
 	Logout(ctx context.Context, userID domain.UserID, deviceID domain.DeviceID) error
+	ChangePassword(ctx context.Context, userID domain.UserID, currentPassword, newPassword string) error
+}
+
+type UpdateProfileCommand struct {
+	UserID    domain.UserID
+	Nickname  *string
+	Email     *string
+	AvatarURL *string
+	Bio       *string
+}
+
+type UpdateSettingsCommand struct {
+	UserID                domain.UserID
+	Locale                *string
+	Theme                 *string
+	NotificationEnabled   *bool
+	MessagePreviewEnabled *bool
+	Extra                 []byte
+}
+
+type UserUseCase interface {
+	GetMe(ctx context.Context, userID domain.UserID) (domain.User, error)
+	UpdateProfile(ctx context.Context, cmd UpdateProfileCommand) (domain.User, error)
+	GetSettings(ctx context.Context, userID domain.UserID) (domain.UserSettings, error)
+	UpdateSettings(ctx context.Context, cmd UpdateSettingsCommand) (domain.UserSettings, error)
 }
 
 type ContactUseCase interface {
@@ -82,6 +115,7 @@ type MessageUseCase interface {
 
 type Services struct {
 	Auth          AuthUseCase
+	Users         UserUseCase
 	Contacts      ContactUseCase
 	Conversations ConversationUseCase
 	Messages      MessageUseCase
