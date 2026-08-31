@@ -1,0 +1,37 @@
+server:
+  port: 18080
+  ws_path: "/ws"
+  upload_dir: "/app/uploads"
+  frontend_dir: "/app/frontend/dist"
+  allowed_origins: []
+
+mysql:
+  host: "${MYSQL_HOST}"
+  port: 3306
+  user: "${MYSQL_USER}"
+  password: "${MYSQL_PASSWORD}"
+  db_name: "${MYSQL_DATABASE}"
+
+redis:
+  addr: "${REDIS_ADDR}"
+  password: ""
+  db: 0
+
+rabbitmq:
+  url: "${RABBITMQ_URL}"
+
+jwt:
+  secret: "${JWT_SECRET}"
+  access_exp_hours: 2
+  refresh_exp_days: 7
+
+file:
+  max_size_mb: 50
+  allowed_exts: ["jpg", "jpeg", "png", "gif", "mp4"]
+
+moment:
+  big_user_friend_threshold: 500
+  timeline_max_len: 1000
+  like_persist_batch_size: 200
+  like_persist_flush_ms: 500
+  like_cache_ttl_hours: 168

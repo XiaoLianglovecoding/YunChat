@@ -1,0 +1,9 @@
+.git
+.cache
+**/node_modules
+frontend/dist
+backend/uploads/*
+backend/configs/config.local.yaml
+**/.env
+**/.env.*
+*.log

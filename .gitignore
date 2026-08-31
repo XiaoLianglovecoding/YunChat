@@ -1,0 +1,27 @@
+# Local caches and build output
+.cache/
+*.exe
+*.test
+*.out
+coverage.out
+
+# Backend
+backend/uploads/*
+!backend/uploads/.gitkeep
+backend/configs/config.local.yaml
+backend/configs/config.yaml
+backend/server
+
+# Frontend
+frontend/node_modules/
+frontend/dist/
+frontend/coverage/
+frontend/*.tsbuildinfo
+
+# Environment and editors
+.env
+*.env.local
+.idea/
+.vscode/
+.DS_Store
+Thumbs.db

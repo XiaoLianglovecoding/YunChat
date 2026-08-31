@@ -1,0 +1,39 @@
+# 本地端口与根目录 docker-compose.yaml 保持一致。
+# 复制为 config.local.yaml；该文件已被 .gitignore 忽略。
+server:
+  port: 18080
+  ws_path: "/ws"
+  upload_dir: "./uploads"
+  frontend_dir: "../frontend/dist"
+  allowed_origins: ["http://localhost:5173"]
+
+mysql:
+  host: "127.0.0.1"
+  port: 13306
+  user: "my_im"
+  password: "my_im123"
+  db_name: "my_im"
+
+redis:
+  addr: "127.0.0.1:16379"
+  password: ""
+  db: 0
+
+rabbitmq:
+  url: "amqp://my_im_mq:my_im_mq123@127.0.0.1:5673/"
+
+jwt:
+  secret: "local-development-only-change-me"
+  access_exp_hours: 2
+  refresh_exp_days: 7
+
+file:
+  max_size_mb: 50
+  allowed_exts: ["jpg", "jpeg", "png", "gif", "mp4"]
+
+moment:
+  big_user_friend_threshold: 500
+  timeline_max_len: 1000
+  like_persist_batch_size: 200
+  like_persist_flush_ms: 500
+  like_cache_ttl_hours: 168

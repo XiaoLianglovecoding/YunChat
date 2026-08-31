@@ -1,0 +1,39 @@
+# 可直接用于骨架启动。业务接入基础设施前，请复制为 config.local.yaml 并修改凭据。
+server:
+  port: 18080
+  ws_path: "/ws"
+  upload_dir: "./uploads"
+  frontend_dir: "../frontend/dist"
+  allowed_origins:
+    - "http://localhost:5173"
+
+mysql:
+  host: "localhost"
+  port: 13306
+  user: "my_im"
+  password: "my_im123"
+  db_name: "my_im"
+
+redis:
+  addr: "localhost:16379"
+  password: ""
+  db: 0
+
+rabbitmq:
+  url: "amqp://my_im_mq:my_im_mq123@localhost:5673/"
+
+jwt:
+  secret: "CHANGE-THIS-BEFORE-IMPLEMENTING-AUTH"
+  access_exp_hours: 2
+  refresh_exp_days: 7
+
+file:
+  max_size_mb: 50
+  allowed_exts: ["jpg", "jpeg", "png", "gif", "mp4"]
+
+moment:
+  big_user_friend_threshold: 500
+  timeline_max_len: 1000
+  like_persist_batch_size: 200
+  like_persist_flush_ms: 500
+  like_cache_ttl_hours: 168

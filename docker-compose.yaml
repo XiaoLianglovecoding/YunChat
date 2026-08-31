@@ -1,0 +1,83 @@
+name: my-im
+
+services:
+  mysql:
+    image: mysql:8.4
+    restart: unless-stopped
+    environment:
+      MYSQL_ROOT_PASSWORD: "${MYSQL_ROOT_PASSWORD:-root123}"
+      MYSQL_DATABASE: "${MYSQL_DATABASE:-my_im}"
+      MYSQL_USER: "${MYSQL_USER:-my_im}"
+      MYSQL_PASSWORD: "${MYSQL_PASSWORD:-my_im123}"
+    ports:
+      - "127.0.0.1:${MYSQL_PORT:-13306}:3306"
+    volumes:
+      - mysql_data:/var/lib/mysql
+      - ./backend/scripts/migrations:/docker-entrypoint-initdb.d:ro
+    command: --character-set-server=utf8mb4 --collation-server=utf8mb4_unicode_ci
+    healthcheck:
+      test: ["CMD-SHELL", "mysqladmin ping -h localhost -u${MYSQL_USER:-my_im} -p${MYSQL_PASSWORD:-my_im123}"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+
+  redis:
+    image: redis:7.2-alpine
+    restart: unless-stopped
+    ports:
+      - "127.0.0.1:${REDIS_PORT:-16379}:6379"
+    volumes:
+      - redis_data:/data
+    command: redis-server --appendonly yes
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+
+  rabbitmq:
+    image: rabbitmq:3.13-management
+    restart: unless-stopped
+    environment:
+      RABBITMQ_DEFAULT_USER: "${RABBITMQ_DEFAULT_USER:-my_im_mq}"
+      RABBITMQ_DEFAULT_PASS: "${RABBITMQ_DEFAULT_PASS:-my_im_mq123}"
+    ports:
+      - "127.0.0.1:${RABBITMQ_AMQP_PORT:-5673}:5672"
+      - "127.0.0.1:${RABBITMQ_MANAGEMENT_PORT:-15673}:15672"
+    volumes:
+      - rabbitmq_data:/var/lib/rabbitmq
+    healthcheck:
+      test: ["CMD", "rabbitmq-diagnostics", "-q", "ping"]
+      interval: 15s
+      timeout: 5s
+      retries: 10
+
+  app:
+    profiles: ["skeleton-app"]
+    build:
+      context: .
+    environment:
+      JWT_SECRET: "${JWT_SECRET:-development-skeleton-only}"
+      MYSQL_HOST: mysql
+      MYSQL_USER: "${MYSQL_USER:-my_im}"
+      MYSQL_PASSWORD: "${MYSQL_PASSWORD:-my_im123}"
+      MYSQL_DATABASE: "${MYSQL_DATABASE:-my_im}"
+      REDIS_ADDR: redis:6379
+      RABBITMQ_URL: "amqp://${RABBITMQ_DEFAULT_USER:-my_im_mq}:${RABBITMQ_DEFAULT_PASS:-my_im_mq123}@rabbitmq:5672/"
+    ports:
+      - "127.0.0.1:${APP_PORT:-18080}:18080"
+    volumes:
+      - uploads_data:/app/uploads
+    depends_on:
+      mysql:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      rabbitmq:
+        condition: service_healthy
+
+volumes:
+  mysql_data:
+  redis_data:
+  rabbitmq_data:
+  uploads_data:
