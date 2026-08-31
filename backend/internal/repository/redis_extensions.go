@@ -105,7 +105,19 @@ func (r *RedisRepoImpl) ReplaceGroupMembers(ctx context.Context, groupID int64, 
 	for i, id := range userIDs {
 		members[i] = id
 	}
-	return replaceSet(ctx, r.rdb, fmt.Sprintf("group_members:%d", groupID), members)
+	key := fmt.Sprintf("group_members:%d", groupID)
+	pipe := r.rdb.TxPipeline()
+	pipe.Del(ctx, key)
+	if len(members) > 0 {
+		pipe.SAdd(ctx, key, members...)
+	}
+	// The legacy signature cannot supply role/mute metadata. Force the complete
+	// CacheTruth path before group-message Lua trusts this partial projection.
+	pipe.Del(ctx, groupMemberLoadedKey(groupID))
+	if _, err := pipe.Exec(ctx); err != nil {
+		return fmt.Errorf("replace partial group member cache %d: %w", groupID, err)
+	}
+	return nil
 }
 
 func (r *RedisRepoImpl) ReplaceUserGroups(ctx context.Context, userID int64, groupIDs []int64) error {
@@ -129,35 +141,10 @@ func replaceSet(ctx context.Context, client *goredis.Client, key string, members
 }
 
 func (r *RedisRepoImpl) ReplaceFriendCache(ctx context.Context, userID int64, friendIDs []int64) error {
-	pattern := fmt.Sprintf("friend:%d:*", userID)
-	var cursor uint64
-	oldFriends := make([]int64, 0)
-	for {
-		keys, next, err := r.rdb.Scan(ctx, cursor, pattern, 100).Result()
-		if err != nil {
-			return err
-		}
-		for _, key := range keys {
-			var id int64
-			if _, err := fmt.Sscanf(key, "friend:"+strconv.FormatInt(userID, 10)+":%d", &id); err == nil {
-				oldFriends = append(oldFriends, id)
-			}
-		}
-		cursor = next
-		if cursor == 0 {
-			break
-		}
-	}
-	pipe := r.rdb.TxPipeline()
-	for _, id := range oldFriends {
-		pipe.Del(ctx, fmt.Sprintf("friend:%d:%d", userID, id), fmt.Sprintf("friend:%d:%d", id, userID))
-	}
-	for _, id := range friendIDs {
-		pipe.Set(ctx, fmt.Sprintf("friend:%d:%d", userID, id), "1", 0)
-		pipe.Set(ctx, fmt.Sprintf("friend:%d:%d", id, userID), "1", 0)
-	}
-	_, err := pipe.Exec(ctx)
-	return err
+	// A replacement owns only userID's directed projection. Updating the reverse
+	// keys here would let a stale snapshot for A overwrite B's independently
+	// serialized truth. CacheTruthService reconciles the two owners separately.
+	return r.ReplaceFriendOwner(ctx, userID, friendIDs)
 }
 
 func (r *RedisRepoImpl) SetBlacklistMember(ctx context.Context, userID, blockedID int64) error {
@@ -175,7 +162,7 @@ func (r *RedisRepoImpl) ReplaceBlacklist(ctx context.Context, userID int64, bloc
 }
 
 func (r *RedisRepoImpl) SetGroupMemberInfo(ctx context.Context, groupID, userID int64, role int, mutedUntil *time.Time) error {
-	value, err := json.Marshal(map[string]any{"role": role, "muted": mutedUntil != nil && mutedUntil.After(time.Now()), "muted_until": mutedUntil})
+	value, err := json.Marshal(newCachedGroupMemberInfo(role, mutedUntil))
 	if err != nil {
 		return err
 	}
@@ -189,7 +176,7 @@ func (r *RedisRepoImpl) ReplaceGroupMemberInfo(ctx context.Context, groupID int6
 	pipe := r.rdb.TxPipeline()
 	pipe.Del(ctx, key)
 	for _, member := range members {
-		value, err := json.Marshal(map[string]any{"role": member.Role, "muted": member.MutedUntil != nil && member.MutedUntil.After(time.Now()), "muted_until": member.MutedUntil})
+		value, err := json.Marshal(newCachedGroupMemberInfo(member.Role, member.MutedUntil))
 		if err != nil {
 			return err
 		}

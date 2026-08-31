@@ -242,11 +242,16 @@ func (r *RedisRepoImpl) AddGroupMember(ctx context.Context, groupID, userID int6
 	userIDStr := strconv.FormatInt(userID, 10)
 	groupIDStr := strconv.FormatInt(groupID, 10)
 
-	if err := r.rdb.SAdd(ctx, groupKey, userIDStr).Err(); err != nil {
-		return fmt.Errorf("SADD群组成员: %w", err)
-	}
-	if err := r.rdb.SAdd(ctx, userKey, groupIDStr).Err(); err != nil {
-		return fmt.Errorf("SADD用户群组: %w", err)
+	pipe := r.rdb.TxPipeline()
+	pipe.SAdd(ctx, groupKey, userIDStr)
+	pipe.SAdd(ctx, userKey, groupIDStr)
+	pipe.SAdd(ctx, groupReverseOwnerIndexKey(groupID), userIDStr)
+	// This legacy delta method has no role/mute argument, so it cannot create a
+	// complete group_member_info entry. Invalidate the marker: the next message
+	// authorization must reload the full MySQL snapshot before trusting Redis.
+	pipe.Del(ctx, groupMemberLoadedKey(groupID))
+	if _, err := pipe.Exec(ctx); err != nil {
+		return fmt.Errorf("添加群成员缓存: %w", err)
 	}
 	return nil
 }
@@ -263,9 +268,12 @@ func (r *RedisRepoImpl) RemoveGroupMember(ctx context.Context, groupID, userID i
 	if err != nil {
 		return fmt.Errorf("读取退群用户会话摘要: %w", err)
 	}
-	pipe := r.rdb.Pipeline()
+	pipe := r.rdb.TxPipeline()
 	pipe.SRem(ctx, groupKey, userIDStr)
 	pipe.SRem(ctx, userKey, groupIDStr)
+	pipe.SRem(ctx, groupReverseOwnerIndexKey(groupID), userIDStr)
+	pipe.HDel(ctx, fmt.Sprintf("group_member_info:%d", groupID), userIDStr)
+	pipe.Del(ctx, groupMemberLoadedKey(groupID))
 	for _, existing := range members {
 		var summary model.ConvSummary
 		if (json.Unmarshal([]byte(existing), &summary) == nil && summary.ConvID == convID) || existing == convID {
@@ -707,25 +715,31 @@ func (r *RedisRepoImpl) DeleteMomentLikes(ctx context.Context, momentID int64) e
 
 // ── 好友缓存 ──
 
-// SetFriendCache 在 Redis 中写入双向好友关系缓存。
-// Lua 消息校验脚本依赖此 key 判断好友关系。
+// SetFriendCache is kept for the broad legacy repository contract. Production
+// friend flows use CacheTruthService, which serializes and reloads MySQL truth.
 func (r *RedisRepoImpl) SetFriendCache(ctx context.Context, uidA, uidB int64) error {
-	pipe := r.rdb.Pipeline()
+	pipe := r.rdb.TxPipeline()
 	pipe.Set(ctx, fmt.Sprintf("friend:%d:%d", uidA, uidB), "1", 0)
 	pipe.Set(ctx, fmt.Sprintf("friend:%d:%d", uidB, uidA), "1", 0)
+	pipe.SAdd(ctx, friendOwnerIndexKey(uidA), uidB)
+	pipe.SAdd(ctx, friendOwnerIndexKey(uidB), uidA)
 	if _, err := pipe.Exec(ctx); err != nil {
 		return fmt.Errorf("设置好友缓存 %d<->%d: %w", uidA, uidB, err)
 	}
 	return nil
 }
 
-// DeleteFriendCache removes the bidirectional friendship keys used by the
-// private-message Lua authorization check.
+// DeleteFriendCache is the matching legacy delta. Production friend flows use
+// CacheTruthService rather than calling this method directly.
 func (r *RedisRepoImpl) DeleteFriendCache(ctx context.Context, uidA, uidB int64) error {
-	if err := r.rdb.Del(ctx,
+	pipe := r.rdb.TxPipeline()
+	pipe.Del(ctx,
 		fmt.Sprintf("friend:%d:%d", uidA, uidB),
 		fmt.Sprintf("friend:%d:%d", uidB, uidA),
-	).Err(); err != nil {
+	)
+	pipe.SRem(ctx, friendOwnerIndexKey(uidA), uidB)
+	pipe.SRem(ctx, friendOwnerIndexKey(uidB), uidA)
+	if _, err := pipe.Exec(ctx); err != nil {
 		return fmt.Errorf("删除好友缓存 %d<->%d: %w", uidA, uidB, err)
 	}
 	return nil

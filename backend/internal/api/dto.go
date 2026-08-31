@@ -37,12 +37,31 @@ type SendFriendRequest struct {
 	Message  string `json:"message"`
 }
 
+type SendFriendResponse struct {
+	RequestID  int64 `json:"request_id"`
+	FromUserID int64 `json:"from_user_id"`
+	ToUserID   int64 `json:"to_user_id"`
+	Status     int   `json:"status"`
+}
+
 type FriendRequestAction struct {
 	RequestID int64 `json:"request_id" binding:"required"`
 }
 
 type BlockUserRequest struct {
 	BlockedID int64 `json:"blocked_id" binding:"required"`
+}
+
+type PaginationResponse struct {
+	Total   int64 `json:"total"`
+	Offset  int   `json:"offset"`
+	Limit   int   `json:"limit"`
+	HasMore bool  `json:"has_more"`
+}
+
+type PageResponse[T any] struct {
+	Items      []T                `json:"items"`
+	Pagination PaginationResponse `json:"pagination"`
 }
 
 type CreateGroupRequest struct {

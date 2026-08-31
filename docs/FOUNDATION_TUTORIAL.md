@@ -11,7 +11,7 @@
 校验服务名、地址、连接池、超时
         │
         v
-连接 MySQL ──> 执行 001..011 迁移 ──失败──> 退出，不监听 HTTP
+连接 MySQL ──> 执行 001..012 迁移 ──失败──> 退出，不监听 HTTP
         │
         v
 连接 Redis ──> Ping ──> 加载 6 个 Lua 脚本并核对 SHA
@@ -77,7 +77,7 @@ go run ./cmd/migrate -c configs/config.local.yaml up  # 再执行一次应安全
 
 如果看到 `DIRTY`，不要直接删除记录。先检查失败 SQL 已经改了哪些列或索引，修复数据库到明确状态，再决定人工标记或重做。这样虽然麻烦，却能避免服务带着半套 Schema 接流量。
 
-历史迁移 001..010 被保留，011 只做升级修正；`backend/scripts/baseline/000_final_schema.sql` 是最终结构的阅读参考，不由程序执行。这样既能升级旧库，也能让新同学快速看懂最终 14 张表。
+历史迁移 001..010 被保留，011 做基础升级修正，012 增加好友分页索引和缓存协调事件；`backend/scripts/baseline/000_final_schema.sql` 是最终结构的阅读参考，不由程序执行。这样既能升级旧库，也能让新同学快速看懂最终 15 张业务/协调表。
 
 ## 4. MySQL Repository：连接池、超时和事务
 
@@ -123,7 +123,7 @@ Redis 客户端在 `backend/internal/infra/redis.go`，Repository 在 `redis_rep
 4. 任一脚本失败就阻止启动；
 5. 在结构化启动日志记录“脚本名 → SHA”。
 
-执行使用 go-redis 的 `Script.Run`：通常走 `EVALSHA`，Redis 重启导致脚本缓存消失时会自动回退加载。好友、黑名单、群成员等缓存仍以 MySQL 为真相，后续 `CACHE-001` 要完成启动重建与按需回源。
+执行使用 go-redis 的 `Script.Run`：通常走 `EVALSHA`，Redis 重启导致脚本缓存消失时会自动回退加载。好友、黑名单、群成员缓存已经在 `CACHE-001` 中实现启动预热、按需回源、事务协调事件与管理命令；详见 `FRIEND_CACHE_TUTORIAL.md`。
 
 ## 6. RabbitMQ：发布成功不等于“函数没报错”
 

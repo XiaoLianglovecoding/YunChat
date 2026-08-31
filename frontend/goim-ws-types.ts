@@ -53,6 +53,11 @@ export const ServerMsgType = {
   SyncBatch:      "syncBatch",
   ConvSync:       "convSync",
   MsgRevoked:     "msgRevoked",
+  FriendApply:    "friendApply",
+  FriendAccepted: "friendAccepted",
+  Presence:       "presence",
+  GroupRemoved:   "groupRemoved",
+  GroupAdded:     "groupAdded",
   Kick:           "kick",
   Error:          "error",
 } as const;
@@ -164,8 +169,29 @@ export interface GroupAddedNotification {
 }
 
 /** 好友申请 (通过WS) */
+export interface FriendApplyNotification {
+  requestId: number;
+  fromUserId: number;
+  username: string;
+  avatarUrl?: string;
+  message: string;
+  createdAt: string;
+}
 
 /** 好友申请被接受通知 */
+export interface FriendAcceptedNotification {
+  requestId: number;
+  userId: number;
+  friendId: number;
+  username: string;
+  avatarUrl?: string;
+}
+
+/** 好友在线状态变更通知 */
+export interface PresenceNotification {
+  userId: number;
+  online: boolean;
+}
 
 /** 错误通知 */
 export interface WsError {
@@ -189,16 +215,19 @@ export type ClientWsMessage =
 // ──────────────────────────────────────────────────────
 
 export type ServerWsMessage =
-  | { type: "msg";            data: InboxMessage }
-  | { type: "serverAck";      data: ServerAck }
-  | { type: "syncBatch";      data: SyncBatch }
-  | { type: "convSync";       data: ConvSync }
-  | { type: "msgRevoked";     data: RevokedNotification }
+  | { type: "msg"; data: InboxMessage }
+  | { type: "serverAck"; data: ServerAck }
+  | { type: "syncBatch"; data: SyncBatch }
+  | { type: "convSync"; data: ConvSync }
+  | { type: "msgRevoked"; data: RevokedNotification }
+  | { type: "friendApply"; data: FriendApplyNotification }
+  | { type: "friendAccepted"; data: FriendAcceptedNotification }
+  | { type: "presence"; data: PresenceNotification }
   // `kick` is emitted by the connection manager without a `data` envelope.
-  | { type: "kick";           reason: KickNotification["reason"] }
-    | { type: "groupRemoved";   data: GroupRemovedNotification }
-    | { type: "groupAdded";     data: GroupAddedNotification }
-  | { type: "error";          data: WsError };
+  | { type: "kick"; reason: KickNotification["reason"] }
+  | { type: "groupRemoved"; data: GroupRemovedNotification }
+  | { type: "groupAdded"; data: GroupAddedNotification }
+  | { type: "error"; data: WsError };
 
 // ──────────────────────────────────────────────────────
 // 会话 ID 构建辅助函数

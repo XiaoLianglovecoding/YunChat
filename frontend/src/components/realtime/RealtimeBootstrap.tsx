@@ -1,10 +1,13 @@
 import { useEffect } from "react";
+import type { QueryClient } from "@tanstack/react-query";
+import type { Friendship, Page } from "../../../goim-api-types";
 import type { ServerWsMessage } from "../../../goim-ws-types";
 import { buildPrivateConvId } from "../../../goim-ws-types";
 import { useAuthStore } from "../../stores/authStore";
 import { useChatStore } from "../../stores/chatStore";
-import { goimSocket } from "../../realtime/socket";
+import { goimSocket, type ConnectionState } from "../../realtime/socket";
 import { friendsApi, groupsApi, settingsApi } from "../../lib/api";
+import { queryClient } from "../../lib/queryClient";
 import { configureNotifications, notifyIncomingMessage } from "../../realtime/notifications";
 
 let loadedSettings: Awaited<ReturnType<typeof settingsApi.get>> | null = null;
@@ -20,15 +23,22 @@ function applyMutedConversations() {
   for (const conversation of chat.conversations) chat.setConversationMuted(conversation.id, mutedIds.has(conversation.id));
 }
 
-async function refreshPrivateConversationIdentities() {
+export async function refreshPrivateConversationIdentities() {
   try {
-    const page = await friendsApi.list(100, 0);
+    const friends: Friendship[] = [];
+    let offset = 0;
+    while (true) {
+      const page = await friendsApi.list(100, offset);
+      friends.push(...page.items);
+      if (!page.pagination.has_more || page.items.length === 0) break;
+      offset = page.pagination.offset + page.items.length;
+    }
     const chat = useChatStore.getState();
-    const friendIDs = new Set(page.items.map((friend) => friend.friend_id));
+    const friendIDs = new Set(friends.map((friend) => friend.friend_id));
     for (const conversation of chat.conversations) {
       if (!conversation.group && !friendIDs.has(conversation.targetId)) chat.removeConversation(conversation.id);
     }
-    for (const friend of page.items) {
+    for (const friend of friends) {
       const conversation = chat.conversations.find((item) => !item.group && item.targetId === friend.friend_id);
       const name = friend.nickname || `用户 #${friend.friend_id}`;
       if (conversation) chat.setConversationIdentity(conversation.id, name, friend.avatar_url, friend.online);
@@ -39,7 +49,23 @@ async function refreshPrivateConversationIdentities() {
   }
 }
 
-function handleServerMessage(message: ServerWsMessage, currentUserId: number, clearSession: () => void) {
+export function invalidateFriendQueries(client: QueryClient = queryClient) {
+  void client.invalidateQueries({ queryKey: ["friends"] });
+  void client.invalidateQueries({ queryKey: ["friend-requests"] });
+}
+
+function updateFriendPresence(userId: number, online: boolean, client: QueryClient = queryClient) {
+  client.setQueriesData<Page<Friendship>>({ queryKey: ["friends"] }, (current) => current ? {
+    ...current,
+    items: current.items.map((friend) => friend.friend_id === userId ? { ...friend, online } : friend),
+  } : current);
+
+  const chat = useChatStore.getState();
+  const conversation = chat.conversations.find((item) => !item.group && item.targetId === userId);
+  if (conversation) chat.setConversationIdentity(conversation.id, conversation.name, conversation.avatarUrl, online);
+}
+
+export function handleServerMessage(message: ServerWsMessage, currentUserId: number, clearSession: () => void) {
   const chat = useChatStore.getState();
   switch (message.type) {
     case "serverAck":
@@ -82,6 +108,24 @@ function handleServerMessage(message: ServerWsMessage, currentUserId: number, cl
     case "msgRevoked":
       chat.revokeMessage(message.data.convId, message.data.serverMsgId);
       break;
+    case "friendApply":
+      void queryClient.invalidateQueries({ queryKey: ["friend-requests"] });
+      break;
+    case "friendAccepted": {
+      invalidateFriendQueries();
+      const targetId = message.data.userId === currentUserId ? message.data.friendId : message.data.userId;
+      if (targetId > 0 && targetId !== currentUserId) {
+        const convId = buildPrivateConvId(currentUserId, targetId);
+        const existing = chat.conversations.find((item) => item.id === convId);
+        const name = message.data.username.trim() || existing?.name || `用户 #${targetId}`;
+        if (existing) chat.setConversationIdentity(convId, name, message.data.avatarUrl ?? existing.avatarUrl);
+        else chat.addPrivateConversation(convId, targetId, name, message.data.avatarUrl);
+      }
+      break;
+    }
+    case "presence":
+      updateFriendPresence(message.data.userId, message.data.online);
+      break;
     case "error":
       chat.failLatestPending(message.data.message);
       break;
@@ -96,6 +140,17 @@ function handleServerMessage(message: ServerWsMessage, currentUserId: number, cl
       chat.addGroupConversation(message.data.groupId, message.data.name);
       break;
   }
+}
+
+export function handleConnectionState(state: ConnectionState) {
+  useChatStore.getState().setConnectionState(state);
+  if (state !== "connected") return;
+
+  // A reconnect may happen after one or more durable friend events were missed.
+  // HTTP revalidation restores the authoritative MySQL state in that case.
+  invalidateFriendQueries();
+  const { lastSyncTime, lastSyncMsgId } = useChatStore.getState();
+  goimSocket.send({ type: "syncReq", data: { lastSyncTime, lastSyncMsgId, batchSize: 50 } });
 }
 
 export function RealtimeBootstrap() {
@@ -123,13 +178,7 @@ export function RealtimeBootstrap() {
       applyMutedConversations();
     }).catch(() => undefined);
     goimSocket.setHandlers({
-      onStateChange: (state) => {
-        useChatStore.getState().setConnectionState(state);
-        if (state === "connected") {
-          const { lastSyncTime, lastSyncMsgId } = useChatStore.getState();
-          goimSocket.send({ type: "syncReq", data: { lastSyncTime, lastSyncMsgId, batchSize: 50 } });
-        }
-      },
+      onStateChange: handleConnectionState,
       onMessage: (message) => handleServerMessage(message, userId, clearSession),
     });
     // React StrictMode performs a synchronous setup/cleanup probe in development.

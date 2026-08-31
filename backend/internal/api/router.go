@@ -31,6 +31,8 @@ type RouterOptions struct {
 	TokenVerifier  middleware.AccessTokenVerifier
 	Profile        service.ProfileService
 	Upload         service.UploadService
+	Friend         service.FriendService
+	WebSocket      gin.HandlerFunc
 	FileMaxSizeMB  int
 }
 
@@ -169,6 +171,17 @@ func NewRouter(opts RouterOptions) *gin.Engine {
 	if opts.Upload != nil {
 		handlers[routeKey(http.MethodPost, "/upload/avatar")] = avatarHandler.UploadAvatar
 	}
+	if opts.Friend != nil {
+		friendHandler := NewFriendHandler(opts.Friend)
+		handlers[routeKey(http.MethodPost, "/friend/request")] = friendHandler.SendRequest
+		handlers[routeKey(http.MethodPost, "/friend/accept")] = friendHandler.AcceptRequest
+		handlers[routeKey(http.MethodPost, "/friend/reject")] = friendHandler.RejectRequest
+		handlers[routeKey(http.MethodGet, "/friend/requests")] = friendHandler.ListRequests
+		handlers[routeKey(http.MethodGet, "/friend/list")] = friendHandler.ListFriends
+		handlers[routeKey(http.MethodDelete, "/friend/:friendID")] = friendHandler.DeleteFriend
+		handlers[routeKey(http.MethodPost, "/friend/block")] = friendHandler.Block
+		handlers[routeKey(http.MethodPost, "/friend/unblock")] = friendHandler.Unblock
+	}
 
 	v1 := r.Group("/api/v1")
 	registerBusinessRoutes(v1, publicRoutes, handlers)
@@ -181,9 +194,13 @@ func NewRouter(opts RouterOptions) *gin.Engine {
 	}
 	registerBusinessRoutes(protected, protectedRoutes, handlers)
 
-	r.GET(opts.WSPath, func(c *gin.Context) {
-		TODO(c, "WS-001", "WebSocket 鉴权、升级、连接生命周期与消息分发")
-	})
+	if opts.WebSocket != nil {
+		r.GET(opts.WSPath, opts.WebSocket)
+	} else {
+		r.GET(opts.WSPath, func(c *gin.Context) {
+			TODO(c, "WS-001", "WebSocket 鉴权、升级、连接生命周期与消息分发")
+		})
+	}
 
 	if opts.UploadDir != "" {
 		if info, err := os.Stat(opts.UploadDir); err == nil && info.IsDir() {

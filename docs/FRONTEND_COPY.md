@@ -55,11 +55,12 @@ JWT 至少要带 `user_id`、`username`、`exp`。否则前端解析出的用户
 - `syncBatch`
 - `convSync`
 - `msgRevoked`
+- `friendApply` / `friendAccepted` / `presence`
 - `kick`
 - `groupAdded` / `groupRemoved`
 - `error`
 
-原 Go 协议还声明了 `friendApply`、`friendAccepted`、`presence`，但复制的 TypeScript `ServerWsMessage` 联合类型没有纳入它们；`FRIEND-005` 负责在实现前统一 Go 常量、TS 类型和前端处理器。
+`friendApply`、`friendAccepted`、`presence` 已在 Go payload、TypeScript 联合类型和 `RealtimeBootstrap` 中同步。前端收到事件时只刷新 TanStack Query；首次连接和重连也会刷新好友/申请，以 MySQL-backed HTTP 数据补偿离线期间错过的 WS 帧。
 
 私聊会话 ID 固定为 `p_{较小用户ID}_{较大用户ID}`，群聊固定为 `g_{groupID}`。
 

@@ -1,11 +1,17 @@
-// Package ws 保留原项目的 WebSocket 模块边界。
-// TODO[WS-001]: 实现升级、JWT 鉴权、单用户连接替换、心跳和消息分发。
+// Package ws 实现 WebSocket 鉴权、连接租约、心跳和在线事件分发。
+// 聊天消息的入站分派仍属于后续 WS-001/MSG 任务。
 package ws
 
 import (
 	"my-im/internal/model"
 	"my-im/internal/protocol"
 )
+
+// Keep these aliases at the WebSocket package boundary so connection code can
+// publish typed events without duplicating the wire contract.
+type FriendApplyPayload = protocol.FriendApplyPayload
+type FriendAcceptedPayload = protocol.FriendAcceptedPayload
+type PresencePayload = protocol.PresencePayload
 
 const (
 	TypeMsg            = protocol.TypeMsg

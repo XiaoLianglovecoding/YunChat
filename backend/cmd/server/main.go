@@ -9,6 +9,7 @@ import (
 	"net/http"
 	"os"
 	"os/signal"
+	"sync"
 	"syscall"
 	"time"
 
@@ -23,6 +24,7 @@ import (
 	redisscripts "my-im/internal/redis"
 	"my-im/internal/repository"
 	"my-im/internal/service"
+	wsserver "my-im/internal/ws"
 )
 
 func main() {
@@ -91,6 +93,22 @@ func run(configPath string) error {
 	if err != nil {
 		return fmt.Errorf("initialize avatar service: %w", err)
 	}
+	cacheTruth := service.NewCacheTruthService(mysqlRepo, redisRepo, service.CacheTruthOptions{})
+	websocketHub, err := wsserver.NewHub(tokenManager, redisRepo, mysqlRepo, wsserver.HubOptions{
+		AllowedOrigins: cfg.Server.AllowedOrigins,
+		Logger:         logger,
+	})
+	if err != nil {
+		return fmt.Errorf("initialize WebSocket hub: %w", err)
+	}
+	friendService, err := service.NewFriendService(mysqlRepo,
+		service.WithFriendCache(cacheTruth),
+		service.WithFriendEventNotifier(websocketHub),
+		service.WithPresenceReader(redisRepo),
+	)
+	if err != nil {
+		return fmt.Errorf("initialize friend service: %w", err)
+	}
 	logger.Info("lua_scripts_loaded", zap.Any("sha", redisscripts.LuaScriptHashes()))
 
 	if err := os.MkdirAll(cfg.Server.UploadDir, 0o755); err != nil {
@@ -100,7 +118,8 @@ func run(configPath string) error {
 		ServiceName: cfg.App.Name, WSPath: cfg.Server.WSPath, UploadDir: cfg.Server.UploadDir,
 		FrontendDir: cfg.Server.FrontendDir, AllowedOrigins: cfg.Server.AllowedOrigins,
 		Readiness: deps.Readiness, Logger: logger, Metrics: metrics, MetricsPath: cfg.Observability.MetricsPath,
-		Auth: authService, TokenVerifier: tokenManager, Profile: avatarService, Upload: avatarService, FileMaxSizeMB: cfg.File.MaxSizeMB,
+		Auth: authService, TokenVerifier: tokenManager, Profile: avatarService, Upload: avatarService,
+		Friend: friendService, WebSocket: websocketHub.Handler, FileMaxSizeMB: cfg.File.MaxSizeMB,
 	})
 	server := &http.Server{
 		Addr: fmt.Sprintf(":%d", cfg.Server.Port), Handler: router,
@@ -110,6 +129,34 @@ func run(configPath string) error {
 
 	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
 	defer stop()
+	workerHost, _ := os.Hostname()
+	workerID := fmt.Sprintf("%s-%d", workerHost, os.Getpid())
+	reconciler := service.NewCacheReconciler(mysqlRepo, cacheTruth, workerID, service.CacheReconcilerOptions{
+		OnError: func(err error) { logger.Warn("cache_reconcile_batch_failed", zap.Error(err)) },
+	})
+	var background sync.WaitGroup
+	background.Add(2)
+	go func() {
+		defer background.Done()
+		report, err := cacheTruth.Warm(ctx, service.CacheScopeAll)
+		if err != nil {
+			if !errors.Is(err, context.Canceled) {
+				logger.Warn("relationship_cache_warm_failed", zap.Error(err))
+			}
+		} else {
+			logger.Info("relationship_cache_warm_completed",
+				zap.Int("users", report.Users), zap.Int("groups", report.Groups), zap.Int("resources", report.Resources))
+		}
+	}()
+	go func() {
+		defer background.Done()
+		// Per-resource Redis locks plus MySQL owner-row locks make warm-up and
+		// durable repair safe to run together. Starting immediately avoids making
+		// a pending security-sensitive blacklist repair wait for a full scan.
+		if err := reconciler.Run(ctx); err != nil && !errors.Is(err, context.Canceled) {
+			logger.Error("cache_reconciler_stopped", zap.Error(err))
+		}
+	}()
 	serverErr := make(chan error, 2)
 	go func() {
 		logger.Info("http_server_started", zap.String("service", cfg.App.Name), zap.String("address", server.Addr))
@@ -126,21 +173,39 @@ func run(configPath string) error {
 		}()
 	}
 
+	var runErr error
 	select {
 	case <-ctx.Done():
 		logger.Info("shutdown_signal_received")
 	case err := <-serverErr:
-		return err
+		runErr = err
 	}
+	stop()
 	shutdownCtx, cancel := context.WithTimeout(context.Background(), config.Milliseconds(cfg.Server.ShutdownTimeoutMS))
 	defer cancel()
+	var shutdownErrors []error
 	if err := server.Shutdown(shutdownCtx); err != nil {
-		return fmt.Errorf("shutdown HTTP server: %w", err)
+		shutdownErrors = append(shutdownErrors, fmt.Errorf("shutdown HTTP server: %w", err))
 	}
+	// Stop accepting/upgrading HTTP requests before taking the WebSocket hub
+	// snapshot, then close the hijacked connections that net/http does not own.
+	websocketHub.Close()
 	if pprofServer != nil {
 		if err := pprofServer.Shutdown(shutdownCtx); err != nil {
 			logger.Warn("shutdown_pprof", zap.Error(err))
+			shutdownErrors = append(shutdownErrors, fmt.Errorf("shutdown pprof server: %w", err))
 		}
 	}
-	return nil
+	backgroundDone := make(chan struct{})
+	go func() {
+		background.Wait()
+		close(backgroundDone)
+	}()
+	select {
+	case <-backgroundDone:
+	case <-shutdownCtx.Done():
+		logger.Warn("background_shutdown_timeout")
+		shutdownErrors = append(shutdownErrors, fmt.Errorf("shutdown background workers: %w", shutdownCtx.Err()))
+	}
+	return errors.Join(runErr, errors.Join(shutdownErrors...))
 }

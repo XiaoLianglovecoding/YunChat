@@ -1,4 +1,4 @@
--- MyIM final schema reference after migrations 001..011.
+-- MyIM final schema reference after migrations 001..012.
 -- This file documents a clean install; the application executes scripts/migrations instead.
 CREATE TABLE users (
  id BIGINT PRIMARY KEY AUTO_INCREMENT, username VARCHAR(50) NOT NULL UNIQUE, password_hash VARCHAR(255) NOT NULL,
@@ -14,7 +14,7 @@ CREATE TABLE friend_requests (
 
 CREATE TABLE friendships (
  id BIGINT PRIMARY KEY AUTO_INCREMENT, user_id BIGINT NOT NULL, friend_id BIGINT NOT NULL, created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
- UNIQUE KEY uk_bidirectional(user_id,friend_id)
+ UNIQUE KEY uk_bidirectional(user_id,friend_id), INDEX idx_friend_page(user_id,created_at,id)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 
 CREATE TABLE `groups` (
@@ -68,6 +68,15 @@ CREATE TABLE user_settings (
  id BIGINT PRIMARY KEY AUTO_INCREMENT, user_id BIGINT NOT NULL UNIQUE, notification_enabled TINYINT(1) NOT NULL DEFAULT 1, msg_preview_enabled TINYINT(1) NOT NULL DEFAULT 1,
  mute_list JSON DEFAULT NULL, created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP, updated_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
  FOREIGN KEY(user_id) REFERENCES users(id) ON DELETE CASCADE
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
+CREATE TABLE cache_reconcile_events (
+ id BIGINT PRIMARY KEY AUTO_INCREMENT, resource_type VARCHAR(32) NOT NULL, resource_id BIGINT NOT NULL,
+ status TINYINT NOT NULL DEFAULT 0, attempts INT NOT NULL DEFAULT 0,
+ available_at DATETIME(6) NOT NULL DEFAULT CURRENT_TIMESTAMP(6), locked_at DATETIME(6) NULL,
+ lock_token VARCHAR(64) NOT NULL DEFAULT '', last_error VARCHAR(500) NOT NULL DEFAULT '',
+ created_at DATETIME(6) NOT NULL DEFAULT CURRENT_TIMESTAMP(6), updated_at DATETIME(6) NOT NULL DEFAULT CURRENT_TIMESTAMP(6) ON UPDATE CURRENT_TIMESTAMP(6),
+ INDEX idx_cache_event_claim(status,available_at,id), INDEX idx_cache_event_resource(resource_type,resource_id,id)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 
 CREATE TABLE message_user_states (

@@ -27,7 +27,9 @@ services:
       - "127.0.0.1:${REDIS_PORT:-16379}:6379"
     volumes:
       - redis_data:/data
-    command: redis-server --appendonly yes
+    # 关系投影依靠“数据 + loaded marker”原子重建；显式禁止因内存
+    # 压力随机淘汰单个业务 key。容量不足时让写入失败并由告警/重建处理。
+    command: redis-server --appendonly yes --maxmemory-policy noeviction
     healthcheck:
       test: ["CMD", "redis-cli", "ping"]
       interval: 10s

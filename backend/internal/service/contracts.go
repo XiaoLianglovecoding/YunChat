@@ -47,14 +47,14 @@ type ProfileService interface {
 }
 
 type FriendService interface {
-	SendRequest(context.Context, int64, int64, string) (*model.FriendRequest, error)  // TODO[FRIEND-001]
-	ListRequests(context.Context, int64, int, int) (Page[model.FriendRequest], error) // TODO[FRIEND-001]
-	AcceptRequest(context.Context, int64, int64) (AcceptFriendResult, error)          // TODO[FRIEND-002]
-	RejectRequest(context.Context, int64, int64) error                                // TODO[FRIEND-002]
-	ListFriends(context.Context, int64, int, int) (Page[model.Friendship], error)     // TODO[FRIEND-003]
-	DeleteFriend(context.Context, int64, int64) error                                 // TODO[FRIEND-003]
-	Block(context.Context, int64, int64) error                                        // TODO[FRIEND-004]
-	Unblock(context.Context, int64, int64) error                                      // TODO[FRIEND-004]
+	SendRequest(context.Context, int64, int64, string) (*model.FriendRequest, error)
+	ListRequests(context.Context, int64, int, int) (Page[model.FriendRequest], error)
+	AcceptRequest(context.Context, int64, int64) (AcceptFriendResult, error)
+	RejectRequest(context.Context, int64, int64) error
+	ListFriends(context.Context, int64, int, int) (Page[model.Friendship], error)
+	DeleteFriend(context.Context, int64, int64) error
+	Block(context.Context, int64, int64) error
+	Unblock(context.Context, int64, int64) error
 }
 
 type AcceptFriendResult struct {

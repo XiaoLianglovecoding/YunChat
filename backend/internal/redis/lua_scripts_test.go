@@ -1,6 +1,9 @@
 package redis
 
-import "testing"
+import (
+	"strings"
+	"testing"
+)
 
 func TestLuaCatalogHasStableUniqueHashes(t *testing.T) {
 	hashes := LuaScriptHashes()
@@ -16,5 +19,34 @@ func TestLuaCatalogHasStableUniqueHashes(t *testing.T) {
 			t.Errorf("scripts %s and %s unexpectedly have same SHA", previous, name)
 		}
 		seen[hash] = name
+	}
+}
+
+func TestPrivateMessageLuaChecksBlacklistInBothDirections(t *testing.T) {
+	want := []string{
+		"'blacklist:' .. receiverID, senderID",
+		"'blacklist:' .. senderID, receiverID",
+		"blockedByReceiver == 1 or blockedBySender == 1",
+	}
+	for _, snippet := range want {
+		if !strings.Contains(luaPrivateMsgCheck, snippet) {
+			t.Errorf("private message Lua is missing %q", snippet)
+		}
+	}
+}
+
+func TestGroupMessageLuaEvaluatesMuteDeadlineAgainstRedisTime(t *testing.T) {
+	want := []string{
+		"redis.call('TIME')",
+		"tonumber(info.muted_until)",
+		"mutedUntil > milliseconds",
+	}
+	for _, snippet := range want {
+		if !strings.Contains(luaGroupMsgCheck, snippet) {
+			t.Errorf("group message Lua is missing %q", snippet)
+		}
+	}
+	if strings.Contains(luaGroupMsgCheck, "if info.muted then") {
+		t.Error("group message Lua must not rely on a frozen muted boolean")
 	}
 }

@@ -18,11 +18,19 @@ type FriendRequest struct {
 	ID         int64     `json:"id"`
 	FromUserID int64     `json:"from_user_id"`
 	ToUserID   int64     `json:"to_user_id"`
+	Username   string    `json:"username,omitempty"`
+	AvatarURL  string    `json:"avatar_url,omitempty"`
 	Message    string    `json:"message"`
-	Status     int       `json:"status"` // 0=待处理, 1=已接受, 2=已拒绝
+	Status     int       `json:"status"`
 	CreatedAt  time.Time `json:"created_at"`
 	UpdatedAt  time.Time `json:"updated_at"`
 }
+
+const (
+	FriendRequestPending  = 0
+	FriendRequestAccepted = 1
+	FriendRequestRejected = 2
+)
 
 type Friendship struct {
 	ID        int64     `json:"id"`

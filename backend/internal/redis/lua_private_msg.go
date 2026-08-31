@@ -44,7 +44,7 @@ type PrivateMsgCheckResult struct {
 	MsgID     int64 // 分配的全局消息 ID（出错时为 0）
 	IsOnline  bool  // 接收者在线状态
 	IsFriend  bool  // 好友关系存在
-	IsBlocked bool  // 发送者在接收者的黑名单中
+	IsBlocked bool  // 任意一方拉黑了另一方
 }
 
 const luaPrivateMsgCheck = `
@@ -59,9 +59,10 @@ if friend1 == 0 or friend2 == 0 then
     return {1, 0, 0, 0, 0}
 end
 
--- 2. 黑名单检查（接收者是否拉黑了发送者？）
-local isBlocked = redis.call('SISMEMBER', 'blacklist:' .. receiverID, senderID)
-if isBlocked == 1 then
+-- 2. 黑名单检查（任意方向拉黑都禁止私信）
+local blockedByReceiver = redis.call('SISMEMBER', 'blacklist:' .. receiverID, senderID)
+local blockedBySender = redis.call('SISMEMBER', 'blacklist:' .. senderID, receiverID)
+if blockedByReceiver == 1 or blockedBySender == 1 then
     return {2, 0, 0, 1, 1}
 end
 

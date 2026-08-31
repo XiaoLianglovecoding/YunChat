@@ -2,13 +2,13 @@
 
 本文件记录从 `E:\IT\IM` 实际迁移、Repository、Lua 和 Consumer 代码审计出的事实。业务实现时以本文件和 `backend/scripts/migrations` 为基线，不以旧设计文档中的示例键名为准。
 
-## MySQL：13 张上游表 + 1 张 MyIM 表
+## MySQL：13 张上游表 + 2 张 MyIM 表
 
 | 表 | 主键与关键字段 | 现有索引/约束 | 业务备注 |
 | --- | --- | --- | --- |
-| `users` | 自增 ID、username、password_hash、资料字段 | username UNIQUE、idx_username | 两个 username 索引重复 |
-| `friend_requests` | from/to、message、status | 两个状态索引、定向 pair UNIQUE | 重复申请复用并重置历史行 |
-| `friendships` | user_id、friend_id | pair UNIQUE、idx_user | 一段好友关系存双向两行 |
+| `users` | 自增 ID、username、password_hash、资料字段 | username UNIQUE | 两用户并发操作按 ID 升序锁行 |
+| `friend_requests` | from/to、message、status | 定向 pair UNIQUE、目标用户稳定分页索引 | 重新申请会替换同向终态旧行并生成新 ID |
+| `friendships` | user_id、friend_id | pair UNIQUE、`(user_id,created_at,id)` | 一段好友关系存双向两行 |
 | `groups` | name、owner_id、max_members | idx_owner | owner 与成员 role=2 双份表达 |
 | `group_members` | group/user、role、muted_until | group-user UNIQUE、group/user 索引 | role：0 成员、1 管理员、2 群主 |
 | `private_messages` | Redis 生成 ID、client_msg_id、sender/receiver、content | sender-client UNIQUE、会话/接收方时间、FULLTEXT | client_msg_id 为空时兼容历史消息 |
@@ -17,9 +17,10 @@
 | `moments` | author、content、JSON media、visibility | author-time、time | 默认 2；历史值 1 在 011 中升级为 2 |
 | `moment_likes` | moment/user | pair UNIQUE、idx_moment | 唯一键支持异步幂等写 |
 | `moment_comments` | moment/user、content | moment-time | Repository 按 ID 排序，索引不覆盖 |
-| `blacklist` | user、blocked | pair UNIQUE、idx_user | Redis 黑名单同步在原代码中缺失 |
+| `blacklist` | user、blocked | pair UNIQUE | 拉黑保留好友；任一方向拉黑都阻止私聊 |
 | `user_settings` | user UNIQUE、通知、预览、JSON mute_list | user UNIQUE + FK | 唯一有物理外键的表 |
 | `message_user_states` | user、conv、msg、deleted_at | 三列联合主键、用户删除时间和会话消息索引 | “仅对当前用户删除”的持久状态 |
+| `cache_reconcile_events` | resource_type、resource_id、状态/租约/重试 | 待处理领取索引、资源索引 | 与关系事务一起写入的可靠缓存协调事件 |
 
 除 `user_settings.user_id -> users.id` 外，其他关联都由应用维护：
 
@@ -33,17 +34,18 @@
 以下操作在新实现中不能拆成多个裸 Repository 调用：
 
 1. 接受好友申请：锁定申请、校验接收者、更新状态、创建双向好友行。
-2. 删除好友：删除双向好友行并产生可重试的缓存失效事件。
-3. 创建群：创建 `groups`、创建群主成员行。
-4. 转让群主：旧群主降级、新群主升级、更新 `groups.owner_id`。
-5. 删除动态：删除评论、点赞、动态主体，并在提交后清缓存。
-6. 修改消息状态：持久撤回/个人删除状态与搜索可见性保持一致。
+2. 删除好友：删除双向好友行并产生可重试的缓存协调事件。
+3. 拉黑/解除：变更黑名单、终结旧申请并产生缓存协调事件。
+4. 创建群：创建 `groups`、创建群主成员行。
+5. 转让群主：旧群主降级、新群主升级、更新 `groups.owner_id`。
+6. 删除动态：删除评论、点赞、动态主体，并在提交后清缓存。
+7. 修改消息状态：持久撤回/个人删除状态与搜索可见性保持一致。
 
 原代码在前四项存在非事务或事务不完整的风险，任务清单已经单列修正。
 
 ## 迁移现状
 
-当前完整保留上游 9 个文件，并追加 011：
+当前完整保留上游 9 个文件，并追加 011、012：
 
 ```text
 001_create_users.sql
@@ -56,6 +58,7 @@
 009_moment_comments_auto_increment.sql
 010_moment_comments_auto_increment_guard.sql
 011_foundation_schema.sql
+012_cache_truth.sql
 ```
 
 注意：
@@ -76,6 +79,12 @@
 - 评论与好友请求索引覆盖时间/id 分页，并删除被 UNIQUE/宽索引覆盖的冗余索引。
 - 统一 Go 非指针字段对应的 NOT NULL/default，并把 visibility 默认值统一为 2。
 
+## 已在 012 完成的好友/缓存修正
+
+- 为好友列表增加 `(user_id, created_at, id)` 稳定分页索引。
+- 新增 `cache_reconcile_events`。业务事务记录的是“重新读取当前真相”，不是可能过期的 Redis `SET/DEL` 指令。
+- Worker 使用行锁租约领取事件；失败按指数退避重试，晚到事件也只会读取 MySQL 最新状态。
+
 仍留给业务任务决定：
 
 - 决定消息全文搜索使用 `MATCH ... AGAINST` 还是普通 LIKE；当前 FULLTEXT 索引没有被原查询使用。
@@ -89,17 +98,25 @@
 | `conv_list:{uid}` | ZSet | 会话摘要；原更新会扫描旧 member，后续需优化 |
 | `unread:{uid}` | Hash | field=convID，value=未读数 |
 | `group_read_pos:{uid}` | Hash | field=群 convID，value=group_seq 水位 |
-| `group_members:{gid}` | Set | 群成员 ID |
-| `user_groups:{uid}` | Set | 用户加入的群 |
-| `group_member_info:{gid}` | Hash | Lua 需要的角色/禁言信息；原代码没有完整维护 |
+| `group_members:{gid}` | Set | 群成员 ID；重建时与反向集合原子同步 |
+| `user_groups:{uid}` | Set | 用户加入的群；群缓存重建时维护反向投影 |
+| `group_member_info:{gid}` | Hash | field=uid；JSON 保存 role 与 Unix 毫秒 `muted_until`，Lua 用 Redis TIME 判断到期 |
 | `friend:{uid}:{fid}` | String | 双向好友缓存，无 TTL |
-| `blacklist:{uid}` | Set | 私聊 Lua 需要；原代码没有写入 |
+| `friend_loaded:{uid}` | String | 即使好友为空，也表示该用户好友投影已从 MySQL 加载 |
+| `friend_owner_index:{uid}` | Set | 此 owner 拥有的 friend key 后缀；在线替换走有界索引，严格运维重建走增量 SCAN，均不使用阻塞式 `KEYS` |
+| `friend_owner_index_loaded:{uid}` | String | owner index 已完成兼容迁移；严格运维重建会在资源锁内先清除此 marker |
+| `blacklist:{uid}` | Set | 当前用户主动拉黑的 ID；私聊 Lua 检查两个方向 |
+| `blacklist_loaded:{uid}` | String | 区分“确定为空”和“Redis 未加载” |
+| `group_member_loaded:{gid}` | String | 群成员 Set/Hash/反向集合已加载标记 |
+| `group_reverse_owner_index:{gid}` | Set | 需要维护 `user_groups:{uid}` 的用户 ID，供有界原子替换 |
+| `group_reverse_owner_index_loaded:{gid}` | String | 旧缓存反向关系已完成一次增量 SCAN 迁移；严格运维重建会先清除此 marker |
+| `cache_warm_lock:{resource}:{id}` | String，短 TTL | 按需回源的带随机所有权锁，防缓存击穿 |
 | `refresh:{jti}` | Hash，TTL=令牌寿命 | 刷新令牌 family、用户、到期时间 |
 | `refresh_user:{uid}` | Set，TTL | 用户的 refresh jti 索引，用于改密/登出全部撤销 |
 | `msg_dedup:{sender}:{clientMsgID}` | String，TTL 300s | 客户端消息去重 |
 | `msg_id_seq:{millis}` | Counter，TTL 2s | 同一毫秒内 ID 序号 |
 | `group_seq:{gid}` | Counter | 群消息序号 |
-| `online:{uid}` / `conn:{uid}` | String，TTL 60s | 在线和活动连接标识 |
+| `online:{uid}` / `conn:{uid}` | String，TTL 60s | 值为 connectionID；续租、删除都先比较所有权 |
 | `timeline:{uid}` | ZSet | 动态收件箱 |
 | `moment_outbox:{author}` | ZSet | 动态寄件箱 |
 | `moment:big_users` | Set | 大用户集合 |
@@ -108,9 +125,15 @@
 | `moment:like_loaded:{id}` | String | 点赞缓存已预热标记 |
 | `moment:like_lock:{id}` | String，短 TTL | 防缓存击穿锁 |
 
-缓存恢复是 P0：好友、群成员、黑名单都是 MySQL 真相，但消息 Lua 直接依赖 Redis。Redis 清空后若不回源，已有好友会被判定为非好友，已有群成员会被判定为非成员。需要启动重建、按需回源或可靠变更事件三者中的至少两层保障。
+好友、群成员、黑名单都以 MySQL 为唯一真相，Redis 只是 Lua 使用的可重建投影。当前已经有三层恢复：服务启动异步预热、消息校验前按 loaded marker 回源、事务协调事件后台重试。管理命令 `cmd/cachectl` 还能执行全量重建和只读一致性巡检。
 
-本骨架把 Redis 开为 AOF，但 AOF 不能替代重建逻辑。
+关系写入采用“事务 Outbox + 提交后 fast path”：核心状态与协调事件在同一 MySQL 事务提交；随后 fast path 也不直接执行旧 `SET/DEL`，而是重新读 MySQL。同资源 Redis 锁串行多 Worker，MySQL `users/groups` owner 行用 `FOR UPDATE` 锁到 Redis 原子替换完成，因而旧快照不能在新状态之后落地。立即更新失败不会谎称 MySQL 回滚，Worker 会重试。
+
+好友重建只替换 `friend:{owner}:*`，不会擅自删除另一用户拥有的方向；群成员重建会同时维护 Set、Hash、`user_groups` 和有界 owner index，不在 Lua 中运行全库 `KEYS`。
+
+调用私聊 Lua 前必须先执行 `CacheTruthService.EnsurePrivateAccess(sender, receiver)`；调用群聊 Lua 前执行 `EnsureGroupAccess(groupID)`。因此清空 Redis 后的第一次请求会回源，而不是把“key 不存在”误判成业务关系不存在。
+
+本项目把 Redis 开为 AOF 并显式使用 `noeviction`，但 AOF 不能替代上述重建逻辑。loaded marker 保障的是整库/整组 key 丢失后回源；如果运维人工删了业务成员或 Hash field，`cachectl audit` 会报告投影差异，再用严格 `rebuild` 修复。只损坏内部 owner index、业务投影仍正确时未必形成 audit mismatch，但严格重建仍会主动重建该索引：它在同资源锁内清除 loaded/index marker，使下一次替换执行增量 SCAN。启动预热与在线 fast path 不这样做，仍保持与单个 owner 关系数量成正比。
 
 刷新令牌已采用一次性轮换：服务验证 JWT 后用 Redis `WATCH` 检查 `refresh:{oldJTI}`，在同一事务中删除旧会话和用户索引成员，再写入同一 family 的新 JTI。两个并发刷新只有一个能提交，另一个映射为业务码 1106。修改密码会先按 `refresh_user:{uid}` 撤销全部刷新会话，再更新 bcrypt 哈希，避免 Redis 故障时留下仍有效的旧刷新令牌。
 

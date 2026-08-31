@@ -57,11 +57,23 @@ if isMember == 0 then
     return {1, 0, 0, 0, 0}
 end
 
+-- Redis server time is the shared clock for both mute expiry and message IDs.
+-- muted_until is cached as a Unix-millisecond number, not a frozen boolean,
+-- so the same cache entry automatically becomes writable when its deadline passes.
+local redisTime = redis.call('TIME')
+local milliseconds = tonumber(redisTime[1]) * 1000 + math.floor(tonumber(redisTime[2]) / 1000)
+
 -- 2. Mute status check
 local memberInfo = redis.call('HGET', 'group_member_info:' .. groupID, senderID)
 if memberInfo then
     local info = cjson.decode(memberInfo)
-    if info.muted then
+    local mutedUntil = tonumber(info.muted_until)
+    if mutedUntil and mutedUntil > milliseconds then
+        return {2, 0, 0, 1, 1}
+    end
+    -- Rolling-upgrade safety for the old {muted:true, muted_until:"ISO"}
+    -- format. It fails closed until startup rebuild writes the numeric deadline.
+    if not mutedUntil and info.muted == true then
         return {2, 0, 0, 1, 1}
     end
 end
@@ -75,8 +87,6 @@ end
 
 -- 4. Allocate a global message ID from Redis server time.
 -- Format: Unix milliseconds * 1000 + per-millisecond sequence (1..999).
-local redisTime = redis.call('TIME')
-local milliseconds = redisTime[1] * 1000 + math.floor(redisTime[2] / 1000)
 local sequenceKey = 'msg_id_seq:' .. milliseconds
 local sequence = redis.call('INCR', sequenceKey)
 if sequence == 1 then

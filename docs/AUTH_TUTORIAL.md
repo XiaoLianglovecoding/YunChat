@@ -306,7 +306,7 @@ $rotated = Invoke-RestMethod "$base/auth/refresh" -Method Post -ContentType 'app
 Invoke-RestMethod "$base/auth/refresh" -Method Post -ContentType 'application/json' -Body $refreshBody
 ```
 
-好友业务尚未实现，所以带合法 access 请求 `/friend/list` 会到达 TODO 并返回 501；这反而证明 JWT 中间件已经放行了合法身份。无 Token 时应先返回 401。
+好友业务已经在第三阶段实现，所以带合法 access 请求 `/friend/list` 会返回分页数据；无 Token 时仍应先返回 401。若要观察“鉴权成功后才进入 TODO”的行为，可改用尚未实现的群组或消息接口。
 
 ## 12. 测试怎么分层
 
