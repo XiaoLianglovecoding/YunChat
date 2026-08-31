@@ -7,7 +7,7 @@
 - 前端：React 19、TypeScript、Vite 8、Tailwind CSS、Zustand、TanStack Query。
 - 后端：Go 1.24、Gin 单体。
 - 数据组件：MySQL 8.4、Redis 7.2、RabbitMQ 3.13。
-- 原代码实际有 7 个 Service、4 个已实现 Consumer、13 张 MySQL 表。
+- 原代码实际有 7 个 Service、4 个已实现 Consumer、13 张 MySQL 表；MyIM 新增第 14 张状态表。
 - 开发期前后端分离；生产镜像把 `frontend/dist` 交给 Gin 托管。
 
 ## 目标依赖方向
@@ -46,8 +46,8 @@ cmd/server -> api/ws -> service -> repository ports
 | `repository` | MySQL/Redis/MQ 接口 | 隔离存储和消息中间件 |
 | `ws` | 协议再导出 | 升级、分发、错误信封 |
 | `conn` | 包边界 | 单用户连接替换、心跳、在线推送 |
-| `consumer` | 5 个队列名 | 手动 ACK、幂等消费、重试/DLQ |
-| `infra` | 包边界 | 客户端初始化、健康检查、关闭 |
+| `consumer` | 4 个实际队列名 | 手动 ACK、幂等消费、消费失败计数 |
+| `infra` | MySQL/Redis/RabbitMQ、DLQ、Confirm、健康检查 | 客户端初始化、可靠发布、反序关闭 |
 
 ## 目标消息流
 
@@ -85,8 +85,8 @@ cmd/server -> api/ws -> service -> repository ports
 
 - 公开业务路由返回结构化 501。
 - 所有受保护路由先被 `AUTH-004` 中间件拒绝，避免“先写 Handler、忘记加鉴权”。
-- `/ready` 返回 503，避免部署平台把尚未接入基础设施的进程判定为可承载流量。
-- Lua 占位脚本主动返回 Redis 错误，避免意外执行后产生半状态。
+- `/ready` 只有在 MySQL、Redis、RabbitMQ 全部可用时返回 200。
+- 6 个 Lua 脚本只有一套 Go 内来源，启动预加载并核对 SHA。
 
 ## 已确认的源码/文档漂移
 
@@ -108,7 +108,7 @@ cmd/server -> api/ws -> service -> repository ports
 - 私聊 Lua 读取 `blacklist:{uid}`，但原业务没有维护该 Redis Set。
 - 群聊 Lua 读取 `group_member_info:{gid}`，但原群业务没有完整维护禁言信息。
 - Redis 数据丢失后没有从 MySQL 重建好友/群成员缓存。
-- `comment_persist` 只声明队列，没有 Publisher 或 Consumer。
-- 外置 Lua 与 Go 内嵌 Lua 已分叉；新实现必须选一个单一来源。
+- `comment_persist` 因没有 Publisher/Consumer 已从 MyIM 拓扑删除，评论采用同步 MySQL 写。
+- 外置 Lua 已删除，`internal/redis/lua_*.go` 是唯一来源。
 - `millis*1000+同毫秒序号` 在单毫秒超过 1000 条时可能碰撞，必须由 MSG-000 替换。
 - 原 Dockerfile 构建 `./cmd`，真实入口是 `./cmd/server`；本骨架已修正。

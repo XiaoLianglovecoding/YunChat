@@ -76,7 +76,7 @@ export function AuthPage({ mode }: AuthPageProps) {
         </footer>
         {import.meta.env.DEV && <button className="auth-preview-button" onClick={() => { enterPreview(); navigate("/app/chats/lin-cheng", { replace: true }); }} type="button">暂不连接后端，进入界面预览</button>}
       </motion.section>
-      <p className="auth-caption">GoIM · 专注而轻盈的即时通讯体验</p>
+      <p className="auth-caption">MyIM · 专注而轻盈的即时通讯体验</p>
     </main>
   );
 }

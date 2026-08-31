@@ -1,4 +1,4 @@
-module github.com/example/my-im
+module my-im
 
 go 1.24.0
 

@@ -6,7 +6,7 @@ import (
 	"io"
 	"time"
 
-	"github.com/example/my-im/internal/model"
+	"my-im/internal/model"
 )
 
 type Page[T any] struct {

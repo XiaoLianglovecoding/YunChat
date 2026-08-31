@@ -4,66 +4,68 @@ import (
 	"net/http"
 
 	"github.com/gin-gonic/gin"
+
+	"my-im/internal/apperror"
 )
 
 const (
-	CodeSuccess = 0
+	CodeSuccess = int(apperror.CodeSuccess)
 
-	CodeInternalFailure = 1000
-	CodeMissingParam    = 1001
-	CodeInvalidParam    = 1002
-	CodeUnauthorized    = 1003
+	CodeInternalFailure = int(apperror.CodeInternalFailure)
+	CodeMissingParam    = int(apperror.CodeMissingParam)
+	CodeInvalidParam    = int(apperror.CodeInvalidParam)
+	CodeUnauthorized    = int(apperror.CodeUnauthorized)
 
-	CodeUsernameTooShort = 1101
-	CodePasswordTooShort = 1102
-	CodeUsernameTaken    = 1103
-	CodeUserNotFound     = 1104
-	CodeWrongPassword    = 1105
-	CodeInvalidToken     = 1106
+	CodeUsernameTooShort = int(apperror.CodeUsernameTooShort)
+	CodePasswordTooShort = int(apperror.CodePasswordTooShort)
+	CodeUsernameTaken    = int(apperror.CodeUsernameTaken)
+	CodeUserNotFound     = int(apperror.CodeUserNotFound)
+	CodeWrongPassword    = int(apperror.CodeWrongPassword)
+	CodeInvalidToken     = int(apperror.CodeInvalidToken)
 
-	CodeSelfRequest      = 1201
-	CodeAlreadyFriends   = 1202
-	CodeFriendBlocked    = 1203
-	CodeDuplicateRequest = 1204
-	CodeRequestNotFound  = 1205
-	CodeNotRequestTarget = 1206
-	CodeAlreadyBlocked   = 1207
+	CodeSelfRequest      = int(apperror.CodeSelfRequest)
+	CodeAlreadyFriends   = int(apperror.CodeAlreadyFriends)
+	CodeFriendBlocked    = int(apperror.CodeFriendBlocked)
+	CodeDuplicateRequest = int(apperror.CodeDuplicateRequest)
+	CodeRequestNotFound  = int(apperror.CodeRequestNotFound)
+	CodeNotRequestTarget = int(apperror.CodeNotRequestTarget)
+	CodeAlreadyBlocked   = int(apperror.CodeAlreadyBlocked)
 
-	CodeNotOwnerOrAdmin     = 1301
-	CodeGroupNotFound       = 1302
-	CodeAlreadyMember       = 1303
-	CodeGroupFull           = 1304
-	CodeCannotRemoveOwner   = 1305
-	CodeCannotLeaveAsOwner  = 1306
-	CodeInvalidRole         = 1307
-	CodeMemberNotFriend     = 1308
-	CodeCannotRemovePeer    = 1309
-	CodeGroupMemberNotFound = 1310
+	CodeNotOwnerOrAdmin     = int(apperror.CodeNotOwnerOrAdmin)
+	CodeGroupNotFound       = int(apperror.CodeGroupNotFound)
+	CodeAlreadyMember       = int(apperror.CodeAlreadyMember)
+	CodeGroupFull           = int(apperror.CodeGroupFull)
+	CodeCannotRemoveOwner   = int(apperror.CodeCannotRemoveOwner)
+	CodeCannotLeaveAsOwner  = int(apperror.CodeCannotLeaveAsOwner)
+	CodeInvalidRole         = int(apperror.CodeInvalidRole)
+	CodeMemberNotFriend     = int(apperror.CodeMemberNotFriend)
+	CodeCannotRemovePeer    = int(apperror.CodeCannotRemovePeer)
+	CodeGroupMemberNotFound = int(apperror.CodeGroupMemberNotFound)
 
-	CodeMsgNotRevocable   = 1401
-	CodeMsgRevokeNotOwner = 1402
-	CodeMsgDeleteFailed   = 1403
+	CodeMsgNotRevocable   = int(apperror.CodeMsgNotRevocable)
+	CodeMsgRevokeNotOwner = int(apperror.CodeMsgRevokeNotOwner)
+	CodeMsgDeleteFailed   = int(apperror.CodeMsgDeleteFailed)
 
-	CodeMomentContentEmpty = 1501
-	CodeMomentNotFound     = 1502
-	CodeNotCommentOwner    = 1503
-	CodeInvalidVisibility  = 1504
-	CodeCommentNotFound    = 1505
-	CodeNotMomentOwner     = 1506
+	CodeMomentContentEmpty = int(apperror.CodeMomentContentEmpty)
+	CodeMomentNotFound     = int(apperror.CodeMomentNotFound)
+	CodeNotCommentOwner    = int(apperror.CodeNotCommentOwner)
+	CodeInvalidVisibility  = int(apperror.CodeInvalidVisibility)
+	CodeCommentNotFound    = int(apperror.CodeCommentNotFound)
+	CodeNotMomentOwner     = int(apperror.CodeNotMomentOwner)
 
-	CodeSettingsNotFound = 1701
-	CodeMuteConvExists   = 1702
-	CodeMuteConvNotFound = 1703
+	CodeSettingsNotFound = int(apperror.CodeSettingsNotFound)
+	CodeMuteConvExists   = int(apperror.CodeMuteConvExists)
+	CodeMuteConvNotFound = int(apperror.CodeMuteConvNotFound)
 
-	CodePrivateNotFriend = 4001
-	CodePrivateBlocked   = 4002
-	CodePrivateDuplicate = 4003
-	CodeGroupNotMember   = 5001
-	CodeGroupMuted       = 5002
-	CodeGroupDuplicate   = 5003
+	CodePrivateNotFriend = int(apperror.CodePrivateNotFriend)
+	CodePrivateBlocked   = int(apperror.CodePrivateBlocked)
+	CodePrivateDuplicate = int(apperror.CodePrivateDuplicate)
+	CodeGroupNotMember   = int(apperror.CodeGroupNotMember)
+	CodeGroupMuted       = int(apperror.CodeGroupMuted)
+	CodeGroupDuplicate   = int(apperror.CodeGroupDuplicate)
 
 	// 1900 仅用于骨架期；完成对应任务后必须移除该端点的 TODO 响应。
-	CodeNotImplemented = 1900
+	CodeNotImplemented = int(apperror.CodeNotImplemented)
 )
 
 // Response 与已复制前端的固定响应信封保持一致。
@@ -78,12 +80,16 @@ type TodoData struct {
 	Feature string `json:"feature"`
 }
 
-// TODO[CONTRACT-001]: 为每个 Service 错误定义稳定的 HTTP 状态与业务错误码映射。
+func WriteError(c *gin.Context, err error) {
+	appErr := apperror.From(err)
+	c.JSON(appErr.HTTPStatus, Response{Code: int(appErr.Code), Message: appErr.Message})
+}
 
 func TODO(c *gin.Context, taskID, feature string) {
+	err := apperror.WithMessage(apperror.CodeNotImplemented, "TODO["+taskID+"]: "+feature)
 	c.JSON(http.StatusNotImplemented, Response{
-		Code:    CodeNotImplemented,
-		Message: "TODO[" + taskID + "]: " + feature,
+		Code:    int(err.Code),
+		Message: err.Message,
 		Data: TodoData{
 			TaskID:  taskID,
 			Feature: feature,

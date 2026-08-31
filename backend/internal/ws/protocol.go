@@ -3,8 +3,8 @@
 package ws
 
 import (
-	"github.com/example/my-im/internal/model"
-	"github.com/example/my-im/internal/protocol"
+	"my-im/internal/model"
+	"my-im/internal/protocol"
 )
 
 const (

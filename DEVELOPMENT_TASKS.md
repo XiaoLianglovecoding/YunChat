@@ -27,31 +27,31 @@ rg -n 'TODO\[[A-Z0-9,-]+\]' backend
 
 ## 1. 工程与基础设施
 
-- [ ] **FND-001 (P0)**：确定真实 Git module、服务名、数据库名和前端品牌文案。  
+- [x] **FND-001 (P0)**：确定真实 Git module、服务名、数据库名和前端品牌文案。  
   依赖：无。验收：不再包含 `github.com/example/my-im`；配置、镜像和文档命名一致。
 
-- [ ] **DB-001 (P0)**：接入版本化迁移工具并在启动/独立命令中提供 `up/status`。  
+- [x] **DB-001 (P0)**：接入版本化迁移工具并在启动/独立命令中提供 `up/status`。  
   依赖：无。验收：使用 `schema_migrations`，对空库和已有库重复执行都安全，失败不会启动业务流量。
 
-- [ ] **DB-002 (P1)**：在保留历史升级路径的前提下生成最终态 baseline 并修正索引/空值/visibility。  
+- [x] **DB-002 (P1)**：在保留历史升级路径的前提下生成最终态 baseline 并修正索引/空值/visibility。  
   依赖：DB-001。验收：保留上游 13 表并新增 `message_user_states`；升级测试覆盖 001-010；模型、索引和修正项与 `docs/DATABASE.md` 一致。
 
-- [ ] **INFRA-001 (P0)**：实现 MySQL 连接池和 `MySQLRepository`。  
+- [x] **INFRA-001 (P0)**：实现 MySQL 连接池和 `MySQLRepository`。  
   依赖：DB-001。验收：连接/查询超时、最大连接数、事务辅助器、唯一键错误映射和健康检查都有测试。
 
-- [ ] **INFRA-002 (P0)**：实现 Redis 客户端、Repository、脚本单一来源和健康检查。  
+- [x] **INFRA-002 (P0)**：实现 Redis 客户端、Repository、脚本单一来源和健康检查。  
   依赖：无。验收：不再同时维护“外置 Lua + Go 常量”两套实现；脚本 SHA/加载失败可观测。
 
-- [ ] **INFRA-003 (P0)**：实现 RabbitMQ 连接、5 队列声明和可靠发布。  
+- [x] **INFRA-003 (P0)**：实现 RabbitMQ 连接、4 个实际主队列及其 DLQ 和可靠发布。  
   依赖：无。验收：支持 Confirm、mandatory return、超时、断线处理、DLQ 和有限重试；`comment_persist` 明确实现或删除。
 
-- [ ] **FND-002 (P0)**：在 `cmd/server` 完成依赖装配与优雅关闭。  
+- [x] **FND-002 (P0)**：在 `cmd/server` 完成依赖装配与优雅关闭。  
   依赖：INFRA-001/002/003。验收：依赖逆序关闭；`/ready` 检查 MySQL/Redis/MQ 并在全部可用时返回 200。
 
-- [ ] **CONTRACT-001 (P0)**：恢复并冻结 HTTP/WS 错误码契约。  
+- [x] **CONTRACT-001 (P0)**：恢复并冻结 HTTP/WS 错误码契约。  
   依赖：无。验收：1001-1703、4001-5003 错误码有类型化 Service 错误映射；HTTP 状态和业务码分别测试；前端枚举同步。
 
-- [ ] **OBS-001 (P1)**：结构化日志、request/trace ID、指标和 pprof。  
+- [x] **OBS-001 (P1)**：结构化日志、request/trace ID、指标和 pprof。  
   依赖：FND-002。验收：日志不含密码/Token/消息正文；能观测 WS 连接、MQ 堆积、消费失败和数据库延迟。
 
 ## 2. 账户与鉴权

@@ -265,6 +265,9 @@ export enum ApiErrorCode {
   CannotRemoveOwner  = 1305,
   CannotLeaveAsOwner = 1306,
   InvalidRole        = 1307,
+  MemberNotFriend    = 1308,
+  CannotRemovePeer   = 1309,
+  GroupMemberNotFound = 1310,
 
   // 消息操作 1400+
   MsgNotRevocable   = 1401,
@@ -277,6 +280,7 @@ export enum ApiErrorCode {
   NotCommentOwner    = 1503,
   InvalidVisibility  = 1504,
   CommentNotFound    = 1505,
+  NotMomentOwner     = 1506,
 
   // 设置 1700+
   SettingsNotFound = 1701,

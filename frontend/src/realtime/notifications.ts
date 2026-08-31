@@ -38,7 +38,7 @@ export function getNotificationPermission() {
 export async function showTestNotification() {
   const permission = await requestNotificationPermission();
   if (permission !== "granted") return permission;
-  const notification = new Notification("GoIM 测试通知", { body: "桌面通知已成功开启。", tag: `goim-test-${Date.now()}`, requireInteraction: true });
+  const notification = new Notification("MyIM 测试通知", { body: "桌面通知已成功开启。", tag: `my-im-test-${Date.now()}`, requireInteraction: true });
   notification.onclick = () => { window.focus(); notification.close(); };
   return permission;
 }

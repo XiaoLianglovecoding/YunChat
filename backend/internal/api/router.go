@@ -1,15 +1,20 @@
 package api
 
 import (
+	"context"
 	"net/http"
 	"os"
 	"path/filepath"
 	"strings"
 
 	"github.com/gin-gonic/gin"
+	"go.uber.org/zap"
 
-	"github.com/example/my-im/internal/middleware"
+	"my-im/internal/middleware"
+	"my-im/internal/observability"
 )
+
+type ReadinessCheck func(context.Context) map[string]error
 
 type RouterOptions struct {
 	ServiceName    string
@@ -17,6 +22,10 @@ type RouterOptions struct {
 	UploadDir      string
 	FrontendDir    string
 	AllowedOrigins []string
+	Readiness      ReadinessCheck
+	Logger         *zap.Logger
+	Metrics        *observability.Metrics
+	MetricsPath    string
 }
 
 // TodoRoute 是从原项目路由表提取出的业务入口。
@@ -95,20 +104,48 @@ func NewRouter(opts RouterOptions) *gin.Engine {
 	if opts.WSPath == "" {
 		opts.WSPath = "/ws"
 	}
+	if opts.Logger == nil {
+		opts.Logger = zap.NewNop()
+	}
+	if opts.Metrics == nil {
+		opts.Metrics = observability.NewMetrics()
+	}
+	if opts.MetricsPath == "" {
+		opts.MetricsPath = "/metrics"
+	}
 
 	r := gin.New()
-	r.Use(gin.Logger(), gin.Recovery(), middleware.CORS(opts.AllowedOrigins))
+	r.Use(middleware.RequestLog(opts.Logger, opts.Metrics), gin.Recovery(), middleware.CORS(opts.AllowedOrigins))
 
 	r.GET("/health", func(c *gin.Context) {
-		c.JSON(http.StatusOK, gin.H{"status": "ok", "service": opts.ServiceName, "mode": "skeleton"})
+		c.JSON(http.StatusOK, gin.H{"status": "ok", "service": opts.ServiceName})
 	})
 	r.GET("/ready", func(c *gin.Context) {
-		c.JSON(http.StatusServiceUnavailable, gin.H{
-			"status":  "not_ready",
-			"service": opts.ServiceName,
-			"reason":  "infrastructure and business TODOs are not implemented",
-		})
+		if opts.Readiness == nil {
+			c.JSON(http.StatusServiceUnavailable, gin.H{"status": "not_ready", "service": opts.ServiceName})
+			return
+		}
+		report := opts.Readiness(c.Request.Context())
+		dependencies := make(map[string]string, len(report))
+		ready := true
+		for name, err := range report {
+			if err != nil {
+				dependencies[name] = "error"
+				ready = false
+				opts.Logger.Warn("readiness_check_failed", zap.String("dependency", name), zap.Error(err))
+			} else {
+				dependencies[name] = "ok"
+			}
+		}
+		status := http.StatusOK
+		label := "ready"
+		if !ready {
+			status = http.StatusServiceUnavailable
+			label = "not_ready"
+		}
+		c.JSON(status, gin.H{"status": label, "service": opts.ServiceName, "dependencies": dependencies})
 	})
+	r.GET(opts.MetricsPath, gin.WrapH(opts.Metrics))
 
 	v1 := r.Group("/api/v1")
 	registerTodoRoutes(v1, publicRoutes)

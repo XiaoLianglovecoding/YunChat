@@ -13,7 +13,6 @@ services:
       - "127.0.0.1:${MYSQL_PORT:-13306}:3306"
     volumes:
       - mysql_data:/var/lib/mysql
-      - ./backend/scripts/migrations:/docker-entrypoint-initdb.d:ro
     command: --character-set-server=utf8mb4 --collation-server=utf8mb4_unicode_ci
     healthcheck:
       test: ["CMD-SHELL", "mysqladmin ping -h localhost -u${MYSQL_USER:-my_im} -p${MYSQL_PASSWORD:-my_im123}"]
@@ -53,11 +52,11 @@ services:
       retries: 10
 
   app:
-    profiles: ["skeleton-app"]
+    profiles: ["full-stack"]
     build:
       context: .
     environment:
-      JWT_SECRET: "${JWT_SECRET:-development-skeleton-only}"
+      JWT_SECRET: "${JWT_SECRET:-development-only-my-im}"
       MYSQL_HOST: mysql
       MYSQL_USER: "${MYSQL_USER:-my_im}"
       MYSQL_PASSWORD: "${MYSQL_PASSWORD:-my_im123}"

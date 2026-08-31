@@ -25,11 +25,11 @@ export function AppShell() {
       <div className="desktop-size-notice">
         <Sparkles size={22} />
         <h1>需要更宽的窗口</h1>
-        <p>GoIM 首期为桌面 Web 设计，请将浏览器窗口调整至至少 1080px。</p>
+        <p>MyIM 首期为桌面 Web 设计，请将浏览器窗口调整至至少 1080px。</p>
       </div>
       <div className="app-window">
         <aside className="nav-rail">
-          <NavLink aria-label="GoIM 首页" className="nav-rail__brand" to="/app/chats"><Sparkles size={20} /></NavLink>
+          <NavLink aria-label="MyIM 首页" className="nav-rail__brand" to="/app/chats"><Sparkles size={20} /></NavLink>
           <nav aria-label="主导航">
             {navItems.map((item) => {
               const Icon = item.icon;

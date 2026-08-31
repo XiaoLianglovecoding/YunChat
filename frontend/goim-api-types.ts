@@ -1,4 +1,4 @@
-/** GoIM HTTP contract v1. See backend/docs/前端接口契约.md. */
+/** MyIM HTTP contract v1. */
 
 export type ApiId = number;
 export type IsoDateTime = string;
@@ -55,4 +55,4 @@ export interface RevokeMessageRequest { convId: string; msgId: ApiId; }
 export interface SearchMessagesQuery { q: string; limit?: number; offset?: number; }
 export interface PrivateMessage { msgId: ApiId; fromId: ApiId; toId: ApiId; content: string; msgType: number; timestamp: IsoDateTime; }
 
-export interface HealthResponse { status: "ok"; service: "goim"; }
+export interface HealthResponse { status: "ok"; service: "my-im"; }

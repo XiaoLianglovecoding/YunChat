@@ -1,9 +1,17 @@
+app:
+  name: "my-im"
+  environment: "docker"
+  auto_migrate: true
+  migration_dir: "/app/scripts/migrations"
+
 server:
   port: 18080
   ws_path: "/ws"
   upload_dir: "/app/uploads"
   frontend_dir: "/app/frontend/dist"
   allowed_origins: []
+  read_header_timeout_ms: 5000
+  shutdown_timeout_ms: 10000
 
 mysql:
   host: "${MYSQL_HOST}"
@@ -11,14 +19,36 @@ mysql:
   user: "${MYSQL_USER}"
   password: "${MYSQL_PASSWORD}"
   db_name: "${MYSQL_DATABASE}"
+  connect_timeout_ms: 5000
+  query_timeout_ms: 3000
+  max_open_conns: 50
+  max_idle_conns: 10
+  conn_max_lifetime_ms: 300000
+  conn_max_idle_time_ms: 60000
 
 redis:
   addr: "${REDIS_ADDR}"
   password: ""
   db: 0
+  dial_timeout_ms: 5000
+  read_timeout_ms: 2000
+  write_timeout_ms: 2000
+  pool_size: 20
+  min_idle_conns: 2
+  health_timeout_ms: 1000
 
 rabbitmq:
   url: "${RABBITMQ_URL}"
+  connect_timeout_ms: 5000
+  publish_timeout_ms: 3000
+  retry_count: 3
+  retry_backoff_ms: 200
+  health_timeout_ms: 1000
+
+observability:
+  log_level: "info"
+  metrics_path: "/metrics"
+  pprof_addr: "127.0.0.1:16060"
 
 jwt:
   secret: "${JWT_SECRET}"

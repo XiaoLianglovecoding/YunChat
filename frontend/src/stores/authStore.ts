@@ -84,7 +84,7 @@ export const useAuthStore = create<AuthState>()(
       setAvatarUrl: (avatarUrl) => set((state) => ({ user: state.user ? { ...state.user, avatarUrl } : null })),
     }),
     {
-      name: "goim-auth-v1",
+      name: "my-im-auth-v1",
       storage: createJSONStorage(() => localStorage),
       partialize: ({ accessToken, refreshToken, accessTokenExpiresAt, user, previewMode }) => ({ accessToken, refreshToken, accessTokenExpiresAt, user, previewMode }),
     },

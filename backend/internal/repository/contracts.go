@@ -5,10 +5,10 @@ import (
 	"context"
 	"time"
 
-	"github.com/example/my-im/internal/model"
+	"my-im/internal/model"
 )
 
-// TODO[INFRA-001]: 用 database/sql + MySQL 8.4 实现该接口，并为事务边界补集成测试。
+// MySQLRepository 由 MySQLRepoImpl 实现；Service 只依赖此端口。
 type MySQLRepository interface {
 	// WithinTransaction 将回调内的所有 Repository 调用绑定到同一事务。
 	// 回调返回错误时必须回滚；提交错误必须原样返回。
@@ -81,7 +81,7 @@ type RefreshSession struct {
 	ExpiresAt time.Time
 }
 
-// TODO[INFRA-002]: 用 go-redis 实现；键规范以 docs/DATABASE.md 为准。
+// RedisRepository 由 RedisRepoImpl 实现；键规范以 docs/DATABASE.md 为准。
 type RedisRepository interface {
 	StoreRefreshSession(context.Context, RefreshSession, time.Duration) error
 	RotateRefreshSession(context.Context, string, RefreshSession, time.Duration) error
@@ -130,7 +130,7 @@ type RedisRepository interface {
 	ReplaceGroupMemberInfo(context.Context, int64, []model.GroupMember) error
 }
 
-// TODO[INFRA-003]: 用 amqp091-go 实现持久发布、confirm、超时和重试策略。
+// MessagePublisher 由 RabbitPublisher 实现，底层提供持久发布、confirm、mandatory 和有限重试。
 type MessagePublisher interface {
 	PublishPrivateMessage(context.Context, *model.PrivateMessage) error
 	PublishGroupMessage(context.Context, *model.GroupMessage) error

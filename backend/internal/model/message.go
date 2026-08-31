@@ -31,8 +31,8 @@ type MsgRevoked struct {
 	RevokedAt  time.Time `json:"revoked_at"`
 }
 
-// MessageUserState 记录“只对当前用户隐藏”等每用户消息状态。
-// TODO[DB-002,MSG-006]: 创建 message_user_states 表和唯一键 (user_id,conv_id,msg_id)。
+// MessageUserState 记录“只对当前用户隐藏”等每用户消息状态；
+// message_user_states 的主键为 (user_id,conv_id,msg_id)。
 type MessageUserState struct {
 	UserID    int64      `json:"user_id"`
 	ConvID    string     `json:"conv_id"`

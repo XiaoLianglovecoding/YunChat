@@ -2,7 +2,7 @@
 
 本文件记录从 `E:\IT\IM` 实际迁移、Repository、Lua 和 Consumer 代码审计出的事实。业务实现时以本文件和 `backend/scripts/migrations` 为基线，不以旧设计文档中的示例键名为准。
 
-## MySQL：13 张表
+## MySQL：13 张上游表 + 1 张 MyIM 表
 
 | 表 | 主键与关键字段 | 现有索引/约束 | 业务备注 |
 | --- | --- | --- | --- |
@@ -11,14 +11,15 @@
 | `friendships` | user_id、friend_id | pair UNIQUE、idx_user | 一段好友关系存双向两行 |
 | `groups` | name、owner_id、max_members | idx_owner | owner 与成员 role=2 双份表达 |
 | `group_members` | group/user、role、muted_until | group-user UNIQUE、group/user 索引 | role：0 成员、1 管理员、2 群主 |
-| `private_messages` | Redis 生成 ID、sender/receiver、content | 会话/接收方时间索引、FULLTEXT | ID 不自增，缺 client_msg_id |
-| `group_messages` | Redis 生成 ID、group_seq | group-seq、group-time、FULLTEXT | group-seq 当前不是 UNIQUE |
-| `msg_revoked` | 自增 ID、msg_id、conv_id、operator | idx_msg | 多态关联，缺唯一撤回约束 |
-| `moments` | author、content、JSON media、visibility | author-time、time | DDL 默认 1，当前语义只接受 2/3 |
+| `private_messages` | Redis 生成 ID、client_msg_id、sender/receiver、content | sender-client UNIQUE、会话/接收方时间、FULLTEXT | client_msg_id 为空时兼容历史消息 |
+| `group_messages` | Redis 生成 ID、client_msg_id、group_seq | sender-client、group-seq UNIQUE；group-time、FULLTEXT | group-seq 可从持久层恢复 |
+| `msg_revoked` | 自增 ID、msg_id、conv_id、operator | conv-msg UNIQUE、idx_msg | 多态关联，唯一键保证撤回幂等 |
+| `moments` | author、content、JSON media、visibility | author-time、time | 默认 2；历史值 1 在 011 中升级为 2 |
 | `moment_likes` | moment/user | pair UNIQUE、idx_moment | 唯一键支持异步幂等写 |
 | `moment_comments` | moment/user、content | moment-time | Repository 按 ID 排序，索引不覆盖 |
 | `blacklist` | user、blocked | pair UNIQUE、idx_user | Redis 黑名单同步在原代码中缺失 |
 | `user_settings` | user UNIQUE、通知、预览、JSON mute_list | user UNIQUE + FK | 唯一有物理外键的表 |
+| `message_user_states` | user、conv、msg、deleted_at | 三列联合主键、用户删除时间和会话消息索引 | “仅对当前用户删除”的持久状态 |
 
 除 `user_settings.user_id -> users.id` 外，其他关联都由应用维护：
 
@@ -42,7 +43,7 @@
 
 ## 迁移现状
 
-当前完整保留上游 9 个文件：
+当前完整保留上游 9 个文件，并追加 011：
 
 ```text
 001_create_users.sql
@@ -54,29 +55,30 @@
 008_create_user_settings.sql
 009_moment_comments_auto_increment.sql
 010_moment_comments_auto_increment_guard.sql
+011_foundation_schema.sql
 ```
 
 注意：
 
 - 编号缺 007，这是上游历史，不是复制遗漏。
 - 005 已把 `moment_comments.id` 建为自增，009 和 010 又重复修正，属于历史补丁。
-- Docker 的 `/docker-entrypoint-initdb.d` 只在空 MySQL 数据卷首次初始化时执行。
+- Docker 不再挂载 `/docker-entrypoint-initdb.d`；服务启动和 `cmd/migrate` 共用同一个迁移器。
 - `CREATE TABLE IF NOT EXISTS` 不会把旧表升级到新字段定义。
 - 当前 DDL 没有逐表声明 Engine/charset，依赖 Compose 的服务器默认值。
 
-`DB-001` 应引入正式 migration runner 和 `schema_migrations`；`DB-002` 再生成干净 baseline。不要在尚未验证已有数据升级路径时删除这些历史脚本。
+迁移器使用 `schema_migrations`、SHA-256 校验和与 dirty 标记，提供 `up/status`。最终阅读基线位于 `backend/scripts/baseline/000_final_schema.sql`，但实际升级始终走历史迁移。
 
-## 建议的 Schema 修正
+## 已在 011 完成的 Schema 修正
 
-- 为消息表增加 `client_msg_id`，至少建立 `(sender_id, client_msg_id)` 唯一键。
-- 新增 `message_user_states(user_id, conv_id, msg_id, deleted_at)`，唯一键为 `(user_id,conv_id,msg_id)`，用于“只对当前用户删除”；它是计划中的第 14 张表，不在复制的 13 表历史迁移内。
-- 将 `group_messages(group_id, group_seq)` 改为 UNIQUE，并设计 Redis 丢失后的序号恢复。
-- 将 `moment_comments` 索引调整为 `(moment_id, id)`。
-- 将好友请求列表索引调整为 `(to_user_id, status, created_at)`。
-- 删除被 UNIQUE 左前缀覆盖的冗余索引：users、friendships、group_members、moment_likes、blacklist 中共 5 个。
+- 为两张消息表增加 `client_msg_id` 和 sender-client 唯一键。
+- 新增 `message_user_states(user_id, conv_id, msg_id, deleted_at)`。
+- 将 `group_messages(group_id, group_seq)` 改为 UNIQUE。
+- 评论与好友请求索引覆盖时间/id 分页，并删除被 UNIQUE/宽索引覆盖的冗余索引。
+- 统一 Go 非指针字段对应的 NOT NULL/default，并把 visibility 默认值统一为 2。
+
+仍留给业务任务决定：
+
 - 决定消息全文搜索使用 `MATCH ... AGAINST` 还是普通 LIKE；当前 FULLTEXT 索引没有被原查询使用。
-- 统一空值策略：数据库 NOT NULL/default 与 Go 的非指针 string/bool/time.Time 必须一致。
-- 明确 `moments.visibility` 默认值为 2，并保留旧值 1 的读取兼容迁移。
 
 ## Redis：实际键规范
 
@@ -92,7 +94,7 @@
 | `group_member_info:{gid}` | Hash | Lua 需要的角色/禁言信息；原代码没有完整维护 |
 | `friend:{uid}:{fid}` | String | 双向好友缓存，无 TTL |
 | `blacklist:{uid}` | Set | 私聊 Lua 需要；原代码没有写入 |
-| `refresh_session:{jti}` | Hash/String，TTL=令牌寿命 | 刷新令牌 family、用户、消费状态 |
+| `refresh:{jti}` | Hash，TTL=令牌寿命 | 刷新令牌 family、用户、到期时间 |
 | `refresh_user:{uid}` | Set，TTL | 用户的 refresh jti 索引，用于改密/登出全部撤销 |
 | `msg_dedup:{sender}:{clientMsgID}` | String，TTL 300s | 客户端消息去重 |
 | `msg_id_seq:{millis}` | Counter，TTL 2s | 同一毫秒内 ID 序号 |
@@ -112,7 +114,7 @@
 
 上游消息 ID 算法为 `Unix毫秒 * 1000 + 同毫秒 INCR`。当单实例在同一毫秒分配超过 1000 个 ID 时，会与下一毫秒编号区间碰撞；多实例、时钟回拨和 Redis 丢失也没有完整证明。`MSG-000` 必须先选择新的全局 ID 方案，再实现私聊/群聊 Lua。
 
-## RabbitMQ：5 个持久队列
+## RabbitMQ：4 个持久主队列 + 各自 DLQ
 
 | 队列 | 当前目标 |
 | --- | --- |
@@ -120,14 +122,12 @@
 | `group_msg_fanout` | 群消息持久化、发件箱、成员会话/未读、在线推送 |
 | `moment_push` | 动态 Feed 写扩散 |
 | `like_persist` | 点赞事件攒批、幂等落库 |
-| `comment_persist` | 上游只声明未使用；实现或删除前保持“预留”状态 |
+评论选择同步写 MySQL，原来没有生产/消费实现的 `comment_persist` 已删除。每个主队列都有 `{queue}.dlq`，死信交换机为 `my_im.dlx`。
 
-原拓扑使用默认 Exchange、routing key 等于队列名、durable queue、持久消息和手动 ACK。缺少：
+发布继续使用默认 Exchange、routing key 等于队列名，并已加入 durable/persistent、Publisher Confirm、mandatory return、超时、断线重连、有限退避重试与 DLQ。消费者业务仍需在后续任务补齐：
 
-- Publisher Confirm 与 mandatory return。
-- DLQ、最大重试次数和退避。
 - 消费者幂等状态。
 - 私聊/群聊重投后的未读计数幂等。
 - 数据库写成功但 ACK 丢失时的重复主键处理。
 
-这些必须在 `INFRA-003`、`MQ-001`、`MQ-002` 和 `MSG-007` 中完成后，才能把 `/ready` 改为 200。
+`/ready` 已检查 RabbitMQ 连接与主队列；消费者处理语义由 `MQ-001`、`MQ-002` 和 `MSG-007` 完成。

@@ -4,7 +4,7 @@
 
 `E:\IT\IM\frontend` 下的 66 个文件已完整复制到 `E:\IT\my_IM\frontend`，包括隐藏的 `.env.example`。没有复制 `node_modules`、`dist` 或本地环境文件；源目录当时也不存在这些生成物。
 
-复制后没有修改前端源码，因此页面、Mock 预览、类型文件和测试仍保持原项目行为。必须保留前端根目录下的：
+复制完成后，FND-001/CONTRACT-001 只修改了品牌与契约项：包名和可见文案改为 MyIM、持久化键改为 `my-im-auth-v1`，并补齐错误码 1308-1310/1506；页面结构、Mock 预览和业务行为仍保持原项目基线。必须保留前端根目录下的：
 
 - `goim-api-types.ts`
 - `goim-ws-types.ts`

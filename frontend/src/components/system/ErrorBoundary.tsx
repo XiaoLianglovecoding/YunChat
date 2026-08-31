@@ -13,7 +13,7 @@ export class ErrorBoundary extends Component<ErrorBoundaryProps, ErrorBoundarySt
   }
 
   componentDidCatch(error: Error, info: ErrorInfo) {
-    if (import.meta.env.DEV) console.error("GoIM render failure", error, info.componentStack);
+    if (import.meta.env.DEV) console.error("MyIM render failure", error, info.componentStack);
   }
 
   render() {

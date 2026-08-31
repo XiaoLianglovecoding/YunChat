@@ -27,8 +27,8 @@ func TestHealth(t *testing.T) {
 	if err := json.Unmarshal(recorder.Body.Bytes(), &body); err != nil {
 		t.Fatalf("decode response: %v", err)
 	}
-	if body["mode"] != "skeleton" {
-		t.Fatalf("mode = %v, want skeleton", body["mode"])
+	if body["service"] != "my-im-test" {
+		t.Fatalf("service = %v, want my-im-test", body["service"])
 	}
 }
 

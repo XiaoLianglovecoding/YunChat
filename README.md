@@ -1,22 +1,24 @@
 # my_IM
 
-这是基于本地开源项目 `E:\IT\IM` 重建的学习型 IM 工程骨架。前端已逐文件原样复制；后端保留原项目的分层、数据模型、HTTP/WebSocket 契约、MySQL 迁移、Redis/MQ 边界，但没有复制业务实现。
+这是基于本地开源项目 `E:\IT\IM` 重建的学习型 IM 工程骨架。前端以逐文件复制为基线并统一了 MyIM 品牌；后端保留原项目的分层、数据模型、HTTP/WebSocket 契约与数据边界，基础设施已经实现，业务 Service 仍使用 TODO 占位。
 
 ## 当前状态
 
 | 部分 | 状态 |
 | --- | --- |
 | React/Vite 前端 | 已复制 66 个源码、配置、测试和文档文件 |
-| Go 服务启动器 | 可启动，默认监听 `18080` |
+| Go 服务启动器 | 已装配 MySQL、Redis、RabbitMQ，默认监听 `18080` |
 | 健康检查 | `GET /health` 返回 200 |
 | 业务 HTTP 契约 | 原 42 个路由全部注册 |
 | WebSocket 入口 | `GET /ws` 已注册 |
 | 业务逻辑 | 统一 `TODO[任务编号]` 占位 |
 | 受保护接口 | 默认被 `AUTH-004` 中间件关闭，防止未鉴权误开放 |
-| MySQL | 原 9 个迁移文件、13 张表完整保留 |
-| Redis/RabbitMQ | 接口、键规范、队列名保留，实现待开发 |
+| MySQL | 版本化迁移、连接池、事务 Repository；13 张上游表 + 1 张用户消息状态表 |
+| Redis | 客户端、Repository、6 个单一来源 Lua、SHA 预加载与健康检查 |
+| RabbitMQ | 4 个实际队列、DLQ、Confirm、mandatory、超时与有限重试 |
+| 可观测性 | JSON 日志、Request ID、`/metrics`、本机 pprof |
 
-`GET /ready` 当前故意返回 503；只有基础设施装配和关键业务完成后，才应改为真正的就绪检查。公开业务路由返回 HTTP 501 和前端认识的响应信封：
+`GET /ready` 会真实检查 MySQL、Redis、RabbitMQ，只有三者都可用才返回 200。尚未实现的公开业务路由仍返回 HTTP 501 和前端认识的响应信封：
 
 ```json
 {
@@ -32,7 +34,7 @@
 my_IM/
 ├── frontend/                    # 从 E:\IT\IM\frontend 原样复制
 ├── backend/
-│   ├── cmd/server/              # 可运行的骨架入口
+│   ├── cmd/server|migrate/      # 服务入口与迁移 up/status 命令
 │   ├── configs/                 # 本地、示例、Docker 配置
 │   ├── internal/
 │   │   ├── api/                 # 42 个业务路由 + TODO 响应
@@ -43,8 +45,8 @@ my_IM/
 │   │   ├── ws|conn|consumer/    # 实时与异步模块边界
 │   │   └── infra|middleware/    # 基础设施与中间件
 │   └── scripts/
-│       ├── migrations/          # 原始迁移，13 张表
-│       └── lua/                 # 4 个明确失败的 TODO 脚本
+│       ├── migrations/          # 001..011 可升级迁移
+│       └── baseline/            # 最终 14 表结构阅读基线
 ├── docs/
 ├── DEVELOPMENT_TASKS.md         # 按依赖顺序拆分的业务任务
 ├── docker-compose.yaml          # MySQL、Redis、RabbitMQ
@@ -81,7 +83,7 @@ Invoke-RestMethod 'http://localhost:18080/health'
 Invoke-WebRequest 'http://localhost:18080/api/v1/auth/register' -Method Post
 ```
 
-第二条请求返回 501 是骨架期的预期行为。
+还可以执行 `Invoke-RestMethod 'http://localhost:18080/ready'`；三项依赖正常时返回 200。业务请求返回 501 仍是当前阶段的预期行为。
 
 ### 3. 启动前端
 
@@ -100,7 +102,7 @@ npm.cmd run dev
 
 ```powershell
 Set-Location 'E:\IT\my_IM'
-docker compose --profile skeleton-app up -d --build
+docker compose --profile full-stack up -d --build
 ```
 
 该方式构建前端和后端，并由 Gin 托管 SPA；它仍是业务返回 501 的骨架服务。
@@ -121,6 +123,7 @@ powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\scripts\verify.ps1 -In
 ## 开发入口
 
 - [业务开发任务清单](DEVELOPMENT_TASKS.md)：实施顺序、依赖和验收标准。
+- [工程与基础设施小白教程](docs/FOUNDATION_TUTORIAL.md)：本阶段代码的逐层原理、命令与故障实验。
 - [架构说明](docs/ARCHITECTURE.md)：模块边界、目标数据流和源码/文档漂移。
 - [数据库与中间件契约](docs/DATABASE.md)：13 张表、Redis 键、MQ 队列和一致性风险。
 - [前端复制与联调说明](docs/FRONTEND_COPY.md)：复制范围、环境变量和后端耦合点。

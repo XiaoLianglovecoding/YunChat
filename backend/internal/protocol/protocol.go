@@ -3,7 +3,7 @@ package protocol
 import (
 	"encoding/json"
 
-	"github.com/example/my-im/internal/model"
+	"my-im/internal/model"
 )
 
 const (
