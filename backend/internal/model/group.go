@@ -2,6 +2,12 @@ package model
 
 import "time"
 
+const (
+	GroupRoleMember = iota
+	GroupRoleAdmin
+	GroupRoleOwner
+)
+
 type Group struct {
 	ID         int64     `json:"id"`
 	Name       string    `json:"name"`
@@ -16,7 +22,7 @@ type GroupMember struct {
 	ID         int64      `json:"id"`
 	GroupID    int64      `json:"group_id"`
 	UserID     int64      `json:"user_id"`
-	Role       int        `json:"role"` // 0=成员, 1=管理员, 2=群主
+	Role       int        `json:"role"` // GroupRoleMember/Admin/Owner
 	MutedUntil *time.Time `json:"muted_until,omitempty"`
 	JoinedAt   time.Time  `json:"joined_at"`
 }

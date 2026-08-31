@@ -109,6 +109,10 @@ func run(configPath string) error {
 	if err != nil {
 		return fmt.Errorf("initialize friend service: %w", err)
 	}
+	groupService, err := service.NewGroupService(mysqlRepo, service.WithGroupCache(cacheTruth))
+	if err != nil {
+		return fmt.Errorf("initialize group service: %w", err)
+	}
 	logger.Info("lua_scripts_loaded", zap.Any("sha", redisscripts.LuaScriptHashes()))
 
 	if err := os.MkdirAll(cfg.Server.UploadDir, 0o755); err != nil {
@@ -119,7 +123,7 @@ func run(configPath string) error {
 		FrontendDir: cfg.Server.FrontendDir, AllowedOrigins: cfg.Server.AllowedOrigins,
 		Readiness: deps.Readiness, Logger: logger, Metrics: metrics, MetricsPath: cfg.Observability.MetricsPath,
 		Auth: authService, TokenVerifier: tokenManager, Profile: avatarService, Upload: avatarService,
-		Friend: friendService, WebSocket: websocketHub.Handler, FileMaxSizeMB: cfg.File.MaxSizeMB,
+		Friend: friendService, Group: groupService, WebSocket: websocketHub.Handler, FileMaxSizeMB: cfg.File.MaxSizeMB,
 	})
 	server := &http.Server{
 		Addr: fmt.Sprintf(":%d", cfg.Server.Port), Handler: router,

@@ -19,6 +19,10 @@ const previewMembers: GroupMember[] = [
 
 const roleNames = { 0: "成员", 1: "管理员", 2: "群主" } as const;
 
+export function canManageGroupProfile(group: Group | undefined, currentMember: GroupMember | undefined, currentUserId: number) {
+  return group?.owner_id === currentUserId || currentMember?.role === 1 || currentMember?.role === 2;
+}
+
 interface CreateGroupDrawerProps {
   open: boolean;
   onClose: () => void;
@@ -60,6 +64,7 @@ export function GroupManagementDrawer({ conversation, open, onClose }: GroupMana
   const currentUserId = useAuthStore((state) => state.user?.id ?? 0);
   const queryClient = useQueryClient();
   const removeConversation = useChatStore((state) => state.removeConversation);
+  const setConversationIdentity = useChatStore((state) => state.setConversationIdentity);
   const setConversationMuted = useChatStore((state) => state.setConversationMuted);
   const groupId = conversation.targetId;
   const [localGroup, setLocalGroup] = useState<Group>({ id: groupId, name: conversation.name, notice: "保持信息透明，重要结论及时同步。", owner_id: currentUserId, max_members: 500, created_at: new Date().toISOString(), updated_at: new Date().toISOString() });
@@ -76,8 +81,9 @@ export function GroupManagementDrawer({ conversation, open, onClose }: GroupMana
   const group = previewMode ? localGroup : groupQuery.data;
   const members = previewMode ? localMembers : (membersQuery.data?.items ?? []);
   const currentMember = members.find((member) => member.user_id === currentUserId);
-  const canManage = currentMember?.role === 1 || currentMember?.role === 2;
   const isOwner = group?.owner_id === currentUserId || currentMember?.role === 2;
+  const canManage = currentMember?.role === 1 || currentMember?.role === 2;
+  const canEditProfile = canManageGroupProfile(group, currentMember, currentUserId);
   const friendsQuery = useQuery({ queryKey: ["friends"], queryFn: () => friendsApi.list(100, 0), enabled: open && !previewMode && canManage });
 
   useEffect(() => {
@@ -91,7 +97,18 @@ export function GroupManagementDrawer({ conversation, open, onClose }: GroupMana
     catch (failure) { setError(failure instanceof ApiError ? failure.message : "操作失败，请稍后重试"); return false; }
   };
 
-  const saveInfo = () => void run(() => setLocalGroup((current) => ({ ...current, name: name.trim(), notice: notice.trim() })), () => groupsApi.update(groupId, { name: name.trim(), notice: notice.trim() })).then((succeeded) => { if (succeeded) setEditing(false); });
+  const saveInfo = () => {
+    const nextName = name.trim();
+    const nextNotice = notice.trim();
+    void run(
+      () => setLocalGroup((current) => ({ ...current, name: nextName, notice: nextNotice })),
+      () => groupsApi.update(groupId, { name: nextName, notice: nextNotice }),
+    ).then((succeeded) => {
+      if (!succeeded) return;
+      setConversationIdentity(conversation.id, nextName);
+      setEditing(false);
+    });
+  };
   const toggleMute = async (muted: boolean) => {
     if (muteSaving) return;
     setError(null);
@@ -125,7 +142,7 @@ export function GroupManagementDrawer({ conversation, open, onClose }: GroupMana
   const memberIds = useMemo(() => new Set(members.map((member) => member.user_id)), [members]);
   const inviteCandidates = (friendsQuery.data?.items ?? []).filter((friend) => !memberIds.has(friend.friend_id) && !friend.is_blocked);
 
-  return <><Drawer description={`${members.length} 位成员 · 最多 ${group?.max_members ?? 500} 人`} onClose={onClose} open={open} title="群聊资料"><div className="group-profile-head"><Avatar name={group?.name ?? conversation.name} size="xl" /><div><h3>{group?.name ?? conversation.name}</h3><p>{group?.notice || "暂无群公告"}</p></div>{canManage && <Button onClick={() => setEditing((value) => !value)} size="sm" variant="secondary">{editing ? "取消编辑" : "编辑资料"}</Button>}</div>
+  return <><Drawer description={`${members.length} 位成员 · 最多 ${group?.max_members ?? 500} 人`} onClose={onClose} open={open} title="群聊资料"><div className="group-profile-head"><Avatar name={group?.name ?? conversation.name} size="xl" /><div><h3>{group?.name ?? conversation.name}</h3><p>{group?.notice || "暂无群公告"}</p></div>{canEditProfile && <Button onClick={() => setEditing((value) => !value)} size="sm" variant="secondary">{editing ? "取消编辑" : "编辑资料"}</Button>}</div>
     <div className="group-notification-setting"><Switch checked={Boolean(conversation.muted)} description="开启后，该群聊不会触发声音与桌面通知。" disabled={muteSaving} label="消息免打扰" onCheckedChange={(checked) => void toggleMute(checked)} /></div>
     {error && <p className="inline-error">{error}</p>}
     {editing && <div className="group-edit-panel"><TextField label="群名称" onChange={(event) => setName(event.target.value)} value={name} /><TextField label="群公告" onChange={(event) => setNotice(event.target.value)} value={notice} /><Button disabled={!name.trim()} onClick={saveInfo} size="sm">保存更改</Button></div>}

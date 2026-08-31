@@ -374,7 +374,7 @@ func (m *MySQLRepoImpl) IsBlocked(ctx context.Context, userID, blockedID int64) 
 	return count > 0, nil
 }
 
-// ── 群组（在任务 14 中完善） ──
+// ── 群组基础 CRUD；GROUP-001 的事务与权限由窄 GroupRepository 编排 ──
 
 func (m *MySQLRepoImpl) CreateGroup(ctx context.Context, group *model.Group) (int64, error) {
 	query := "INSERT INTO `groups` (name, notice, owner_id, max_members, created_at, updated_at) VALUES (?, ?, ?, 500, NOW(), NOW())"
@@ -390,6 +390,7 @@ func (m *MySQLRepoImpl) CreateGroup(ctx context.Context, group *model.Group) (in
 	if err != nil {
 		return 0, fmt.Errorf("创建群组 获取最后插入ID: %w", err)
 	}
+	group.ID = id
 	return id, nil
 }
 
@@ -403,17 +404,12 @@ func (m *MySQLRepoImpl) UpdateGroup(ctx context.Context, group *model.Group) err
 }
 
 func (m *MySQLRepoImpl) GetGroupByID(ctx context.Context, groupID int64) (*model.Group, error) {
-	query := "SELECT id, name, notice, owner_id, max_members, created_at, updated_at FROM `groups` WHERE id = ?"
-	row := m.db.QueryRowContext(ctx, query, groupID)
-	var g model.Group
-	err := row.Scan(&g.ID, &g.Name, &g.Notice, &g.OwnerID, &g.MaxMembers, &g.CreatedAt, &g.UpdatedAt)
+	query := "SELECT id, name, COALESCE(notice, ''), owner_id, max_members, created_at, updated_at FROM `groups` WHERE id = ?"
+	group, err := m.scanGroup(m.db.QueryRowContext(ctx, query, groupID))
 	if err != nil {
-		if err == sql.ErrNoRows {
-			return nil, nil
-		}
 		return nil, fmt.Errorf("按ID获取群组: %w", err)
 	}
-	return &g, nil
+	return group, nil
 }
 
 func (m *MySQLRepoImpl) AddGroupMember(ctx context.Context, member *model.GroupMember) error {

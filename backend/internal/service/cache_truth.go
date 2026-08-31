@@ -123,6 +123,16 @@ func (s *CacheTruthService) EnsureGroupAccess(ctx context.Context, groupID int64
 	return s.ensureLoaded(ctx, repository.CacheResourceGroupMembers, groupID)
 }
 
+// ReconcileGroupMembers 供群成员写操作在 MySQL 提交后立即刷新 Redis 投影。
+// 调用方仍需在同一 MySQL 事务写 cache_reconcile_events，确保 Redis 暂时
+// 不可用时能由后台 worker 最终修复。
+func (s *CacheTruthService) ReconcileGroupMembers(ctx context.Context, groupID int64) error {
+	if groupID <= 0 {
+		return errors.New("reconcile group members: group ID must be positive")
+	}
+	return s.ReconcileNow(ctx, repository.CacheResourceGroupMembers, groupID)
+}
+
 func (s *CacheTruthService) ensureLoaded(ctx context.Context, resource repository.CacheResource, resourceID int64) error {
 	loaded, err := s.isLoaded(ctx, resource, resourceID)
 	if err != nil {

@@ -129,6 +129,8 @@
 
 关系写入采用“事务 Outbox + 提交后 fast path”：核心状态与协调事件在同一 MySQL 事务提交；随后 fast path 也不直接执行旧 `SET/DEL`，而是重新读 MySQL。同资源 Redis 锁串行多 Worker，MySQL `users/groups` owner 行用 `FOR UPDATE` 锁到 Redis 原子替换完成，因而旧快照不能在新状态之后落地。立即更新失败不会谎称 MySQL 回滚，Worker 会重试。
 
+GROUP-001 建群就是这条规则的一个完整例子：`groups`、群主 `group_members(role=2)` 与 `cache_reconcile_events(resource_type='group_members')` 在同一事务提交，之后 `ReconcileGroupMembers` 尽力立即重建 Redis。群列表和群详情仍读 MySQL；`user_groups:{uid}` 只是消息权限检查所需的可重建反向投影，不承担权威列表查询。
+
 好友重建只替换 `friend:{owner}:*`，不会擅自删除另一用户拥有的方向；群成员重建会同时维护 Set、Hash、`user_groups` 和有界 owner index，不在 Lua 中运行全库 `KEYS`。
 
 调用私聊 Lua 前必须先执行 `CacheTruthService.EnsurePrivateAccess(sender, receiver)`；调用群聊 Lua 前执行 `EnsureGroupAccess(groupID)`。因此清空 Redis 后的第一次请求会回源，而不是把“key 不存在”误判成业务关系不存在。

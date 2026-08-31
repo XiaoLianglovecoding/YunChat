@@ -40,9 +40,9 @@ cmd/server -> api/ws -> service -> repository ports
 
 | 模块 | 当前骨架 | 最终职责 |
 | --- | --- | --- |
-| `api` | 账户/头像/好友 Handler，其余路由 501 | DTO、参数校验、调用 Service、错误映射 |
+| `api` | 账户/头像/好友/群资料 Handler，其余路由 501 | DTO、参数校验、调用 Service、错误映射 |
 | `middleware` | CORS、JWT、请求日志/指标 | JWT、限流、追踪、恢复 |
-| `service` | 账户、头像、好友、缓存真相用例 | 权限、事务编排、缓存一致性 |
+| `service` | 账户、头像、好友、群资料、缓存真相用例 | 权限、事务编排、缓存一致性 |
 | `repository` | MySQL/Redis/MQ 接口 | 隔离存储和消息中间件 |
 | `ws` | JWT 升级、单连接替换、心跳租约、好友事件 | 补齐聊天帧分派和错误信封 |
 | `conn` | 保留的包边界 | 后续按规模决定是否从 `ws.Hub` 拆出连接管理器 |
@@ -136,6 +136,24 @@ Redis 修复
 
 WebSocket 事件不是业务事实。用户离线时可能错过 `friendApply` 或 `friendAccepted`，但申请和好友行已经在 MySQL；重连后前端主动失效好友 Query 并通过 HTTP 恢复最终状态。
 当前好友事件是单应用实例内定向推送；跨实例 fanout 属于后续 WS-001/OPS。
+
+### 群创建与资料
+
+```text
+POST /group
+  -> GroupHandler：取得 JWT userID，绑定 name/notice
+  -> GroupProfileService：Unicode 长度校验与空白归一化
+  -> MySQL 同一事务
+       ├── 锁定并确认创建者仍存在
+       ├── INSERT groups
+       ├── INSERT group_members(role=2)
+       └── INSERT cache_reconcile_events(group_members, groupID)
+  -> 提交后尽力重建该群 Redis 成员投影
+```
+
+`GET /group/list` 始终通过 `group_members JOIN groups` 查询 MySQL，只返回当前用户有成员行的群；不能按 `owner_id` 猜测，也不能把可能尚未完整预热的 `user_groups:{uid}` 当成列表真相。详情只允许群成员读取。资料更新按 `groups -> group_members` 顺序加锁，只更新 `name/notice`；权限来自真实 `groups.owner_id` 或成员 `role=1`，不会把一条异常的额外 `role=2` 当成群主。
+
+建群提交后的 Redis 刷新是加速，不是业务真相。刷新失败时 HTTP 仍返回成功，因为同一 MySQL 事务里的协调事件会由后台 Worker 重试；详见 `docs/GROUP_TUTORIAL.md`。
 
 启动预热调用 `CacheTruthService.Warm`，沿用有界 owner index；运维 `cachectl rebuild` 调用严格 `Rebuild`，会在资源锁内重置索引 marker，并通过增量 SCAN 清理索引外人工孤儿。这样日常请求不承担全库扫描成本，显式修复又能兑现审计结果。
 

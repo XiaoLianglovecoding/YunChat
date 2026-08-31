@@ -69,6 +69,10 @@ type CreateGroupRequest struct {
 	Notice string `json:"notice"`
 }
 
+type CreateGroupResponse struct {
+	GroupID int64 `json:"group_id"`
+}
+
 type UpdateGroupRequest struct {
 	Name   string `json:"name" binding:"required"`
 	Notice string `json:"notice"`

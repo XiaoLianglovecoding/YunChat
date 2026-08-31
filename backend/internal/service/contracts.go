@@ -68,11 +68,17 @@ type GroupMemberListItem struct {
 	AvatarURL string `json:"avatar_url,omitempty"`
 }
 
+// GroupProfileService 是 GROUP-001 已落地的用例边界。后续成员管理接口继续
+// 留在 GroupService，避免当前 Handler 被尚未实现的方法绑住。
+type GroupProfileService interface {
+	Create(context.Context, int64, string, string) (int64, error)
+	ListByUser(context.Context, int64) ([]model.Group, error)
+	Get(context.Context, int64, int64) (*model.Group, error)
+	Update(context.Context, int64, int64, string, string) error
+}
+
 type GroupService interface {
-	Create(context.Context, int64, string, string) (int64, error)                           // TODO[GROUP-001]
-	ListByUser(context.Context, int64) ([]model.Group, error)                               // TODO[GROUP-001]
-	Get(context.Context, int64, int64) (*model.Group, error)                                // TODO[GROUP-001]
-	Update(context.Context, int64, int64, string, string) error                             // TODO[GROUP-001]
+	GroupProfileService
 	AddMember(context.Context, int64, int64, int64) error                                   // TODO[GROUP-002]
 	RemoveMember(context.Context, int64, int64, int64) error                                // TODO[GROUP-002]
 	ListMembers(context.Context, int64, int64, int, int) (Page[GroupMemberListItem], error) // TODO[GROUP-002]

@@ -101,9 +101,7 @@ export function handleServerMessage(message: ServerWsMessage, currentUserId: num
       chat.applyConversationSync(message.data.conversations, message.data.unreadMap);
       applyMutedConversations();
       void refreshPrivateConversationIdentities();
-      void groupsApi.list().then((groups) => {
-        for (const group of groups) useChatStore.getState().addGroupConversation(group.id, group.name);
-      }).catch(() => undefined);
+      void refreshGroupConversations(currentUserId);
       break;
     case "msgRevoked":
       chat.revokeMessage(message.data.convId, message.data.serverMsgId);
@@ -142,6 +140,19 @@ export function handleServerMessage(message: ServerWsMessage, currentUserId: num
   }
 }
 
+export async function refreshGroupConversations(expectedUserId: number) {
+  try {
+    const groups = await groupsApi.list();
+    const chat = useChatStore.getState();
+    // Ignore a response for a session that logged out or switched users while
+    // this request was in flight.
+    if (chat.mode !== "live" || chat.liveUserId !== expectedUserId) return;
+    for (const group of groups) chat.addGroupConversation(group.id, group.name);
+  } catch {
+    // 群列表刷新失败不影响 WebSocket 连接和已有会话。
+  }
+}
+
 export function handleConnectionState(state: ConnectionState) {
   useChatStore.getState().setConnectionState(state);
   if (state !== "connected") return;
@@ -172,6 +183,8 @@ export function RealtimeBootstrap() {
     }
 
     useChatStore.getState().initializeLive(userId);
+    // GROUP-001 can restore the user's groups before conversation sync exists.
+    void refreshGroupConversations(userId);
     void settingsApi.get().then((settings) => {
       loadedSettings = settings;
       configureNotifications(settings);
