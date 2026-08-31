@@ -4,9 +4,14 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
+	"time"
 
 	"github.com/gin-gonic/gin"
+
+	"my-im/internal/apperror"
+	authtoken "my-im/internal/auth"
 )
 
 func newTestRouter() *gin.Engine {
@@ -70,20 +75,38 @@ func TestEveryBusinessRouteIsRegistered(t *testing.T) {
 	}
 }
 
-func TestProtectedRouteIsClosedUntilJWTIsImplemented(t *testing.T) {
+func TestProtectedRouteStaysClosedWithoutVerifier(t *testing.T) {
 	recorder := httptest.NewRecorder()
 	request := httptest.NewRequest(http.MethodGet, "/api/v1/friend/list", nil)
 
 	newTestRouter().ServeHTTP(recorder, request)
 
-	if recorder.Code != http.StatusNotImplemented {
-		t.Fatalf("status = %d, want %d", recorder.Code, http.StatusNotImplemented)
+	if recorder.Code != http.StatusUnauthorized {
+		t.Fatalf("status = %d, want %d", recorder.Code, http.StatusUnauthorized)
 	}
 	var body Response
 	if err := json.Unmarshal(recorder.Body.Bytes(), &body); err != nil {
 		t.Fatalf("decode response: %v", err)
 	}
-	if body.Code != CodeNotImplemented {
-		t.Fatalf("code = %d, want %d", body.Code, CodeNotImplemented)
+	if body.Code != int(apperror.CodeUnauthorized) {
+		t.Fatalf("code = %d, want %d", body.Code, apperror.CodeUnauthorized)
+	}
+}
+
+func TestEveryProtectedRouteRequiresAuthorization(t *testing.T) {
+	manager, err := authtoken.NewManager("0123456789abcdef0123456789abcdef", "my-im-test", time.Hour, 24*time.Hour)
+	if err != nil {
+		t.Fatal(err)
+	}
+	router := NewRouter(RouterOptions{ServiceName: "my-im-test", TokenVerifier: manager})
+	replacer := strings.NewReplacer(":friendID", "2", ":groupID", "3", ":memberID", "4", ":momentID", "5", ":commentID", "6", ":msgID", "7", ":convID", "p_1_2")
+	for _, route := range protectedRoutes {
+		path := "/api/v1" + replacer.Replace(route.Path)
+		recorder := httptest.NewRecorder()
+		request := httptest.NewRequest(route.Method, path, nil)
+		router.ServeHTTP(recorder, request)
+		if recorder.Code != http.StatusUnauthorized {
+			t.Errorf("%s %s status = %d, want 401; body=%s", route.Method, path, recorder.Code, recorder.Body.String())
+		}
 	}
 }

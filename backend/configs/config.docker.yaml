@@ -52,12 +52,13 @@ observability:
 
 jwt:
   secret: "${JWT_SECRET}"
+  issuer: "my-im"
   access_exp_hours: 2
   refresh_exp_days: 7
 
 file:
   max_size_mb: 50
-  allowed_exts: ["jpg", "jpeg", "png", "gif", "mp4"]
+  allowed_exts: ["jpg", "jpeg", "png", "gif", "webp"]
 
 moment:
   big_user_friend_threshold: 500

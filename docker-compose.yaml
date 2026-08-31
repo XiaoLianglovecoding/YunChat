@@ -56,7 +56,7 @@ services:
     build:
       context: .
     environment:
-      JWT_SECRET: "${JWT_SECRET:-development-only-my-im}"
+      JWT_SECRET: "${JWT_SECRET:-development-only-my-im-change-me-32}"
       MYSQL_HOST: mysql
       MYSQL_USER: "${MYSQL_USER:-my_im}"
       MYSQL_PASSWORD: "${MYSQL_PASSWORD:-my_im123}"

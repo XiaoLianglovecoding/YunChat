@@ -49,7 +49,7 @@ func (r *RedisRepoImpl) RotateRefreshSession(ctx context.Context, oldJTI string,
 	if ttl <= 0 {
 		return errors.New("replacement refresh session is already expired")
 	}
-	return r.rdb.Watch(ctx, func(tx *goredis.Tx) error {
+	err := r.rdb.Watch(ctx, func(tx *goredis.Tx) error {
 		oldKey := refreshKey(oldJTI)
 		values, err := tx.HGetAll(ctx, oldKey).Result()
 		if err != nil {
@@ -62,6 +62,9 @@ func (r *RedisRepoImpl) RotateRefreshSession(ctx context.Context, oldJTI string,
 		if err != nil {
 			return fmt.Errorf("invalid refresh session user: %w", err)
 		}
+		if oldUserID != next.UserID || values["family_id"] == "" || values["family_id"] != next.FamilyID {
+			return ErrNotFound
+		}
 		_, err = tx.TxPipelined(ctx, func(pipe goredis.Pipeliner) error {
 			pipe.Del(ctx, oldKey)
 			pipe.SRem(ctx, refreshUserKey(oldUserID), oldJTI)
@@ -73,6 +76,11 @@ func (r *RedisRepoImpl) RotateRefreshSession(ctx context.Context, oldJTI string,
 		})
 		return err
 	}, refreshKey(oldJTI))
+	// 两个并发请求同时刷新时，只有一个事务能提交；另一个按“令牌已使用”处理。
+	if errors.Is(err, goredis.TxFailedErr) {
+		return ErrNotFound
+	}
+	return err
 }
 
 func (r *RedisRepoImpl) RevokeUserRefreshSessions(ctx context.Context, userID int64) error {

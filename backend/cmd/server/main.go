@@ -10,16 +10,19 @@ import (
 	"os"
 	"os/signal"
 	"syscall"
+	"time"
 
 	"go.uber.org/zap"
 
 	"my-im/internal/api"
+	authtoken "my-im/internal/auth"
 	"my-im/internal/config"
 	"my-im/internal/infra"
 	"my-im/internal/migrate"
 	"my-im/internal/observability"
 	redisscripts "my-im/internal/redis"
 	"my-im/internal/repository"
+	"my-im/internal/service"
 )
 
 func main() {
@@ -74,7 +77,20 @@ func run(configPath string) error {
 	mysqlRepo := repository.NewMySQLRepository(db, config.Milliseconds(cfg.MySQL.QueryTimeoutMS), metrics.ObserveDB)
 	redisRepo := repository.NewRedisRepo(redisClient)
 	publisher := repository.NewRabbitPublisher(rabbit)
-	_, _, _ = mysqlRepo, redisRepo, publisher
+	_ = publisher
+	tokenManager, err := authtoken.NewManager(cfg.JWT.Secret, cfg.JWT.Issuer,
+		time.Duration(cfg.JWT.AccessExpHours)*time.Hour, time.Duration(cfg.JWT.RefreshExpDays)*24*time.Hour)
+	if err != nil {
+		return fmt.Errorf("initialize JWT manager: %w", err)
+	}
+	authService, err := service.NewAuthService(mysqlRepo, redisRepo, tokenManager, logger)
+	if err != nil {
+		return fmt.Errorf("initialize auth service: %w", err)
+	}
+	avatarService, err := service.NewAvatarService(mysqlRepo, cfg.Server.UploadDir, cfg.File.MaxSizeMB, cfg.File.AllowedExts)
+	if err != nil {
+		return fmt.Errorf("initialize avatar service: %w", err)
+	}
 	logger.Info("lua_scripts_loaded", zap.Any("sha", redisscripts.LuaScriptHashes()))
 
 	if err := os.MkdirAll(cfg.Server.UploadDir, 0o755); err != nil {
@@ -84,6 +100,7 @@ func run(configPath string) error {
 		ServiceName: cfg.App.Name, WSPath: cfg.Server.WSPath, UploadDir: cfg.Server.UploadDir,
 		FrontendDir: cfg.Server.FrontendDir, AllowedOrigins: cfg.Server.AllowedOrigins,
 		Readiness: deps.Readiness, Logger: logger, Metrics: metrics, MetricsPath: cfg.Observability.MetricsPath,
+		Auth: authService, TokenVerifier: tokenManager, Profile: avatarService, Upload: avatarService, FileMaxSizeMB: cfg.File.MaxSizeMB,
 	})
 	server := &http.Server{
 		Addr: fmt.Sprintf(":%d", cfg.Server.Port), Handler: router,

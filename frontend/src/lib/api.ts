@@ -17,7 +17,7 @@ export function refreshAccessToken(): Promise<boolean> {
   if (refreshPromise) return refreshPromise;
 
   const pendingRefresh = (async () => {
-    const { refreshToken, updateAccessToken, clearSession } = useAuthStore.getState();
+    const { refreshToken, rotateSession, clearSession } = useAuthStore.getState();
     if (!refreshToken) {
       clearSession();
       return false;
@@ -25,7 +25,7 @@ export function refreshAccessToken(): Promise<boolean> {
 
     try {
       const response = await authApi.refresh({ refresh_token: refreshToken });
-      updateAccessToken(response.access_token, response.expires_in);
+      rotateSession(response);
       return true;
     } catch {
       clearSession();

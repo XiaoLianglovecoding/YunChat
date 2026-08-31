@@ -83,6 +83,7 @@ type ObservabilityConfig struct {
 
 type JWTConfig struct {
 	Secret         string `yaml:"secret"`
+	Issuer         string `yaml:"issuer"`
 	AccessExpHours int    `yaml:"access_exp_hours"`
 	RefreshExpDays int    `yaml:"refresh_exp_days"`
 }
@@ -201,6 +202,21 @@ func (cfg *Config) applyDefaults() {
 	if cfg.Observability.MetricsPath == "" {
 		cfg.Observability.MetricsPath = "/metrics"
 	}
+	if cfg.JWT.Issuer == "" {
+		cfg.JWT.Issuer = "my-im"
+	}
+	if cfg.JWT.AccessExpHours <= 0 {
+		cfg.JWT.AccessExpHours = 2
+	}
+	if cfg.JWT.RefreshExpDays <= 0 {
+		cfg.JWT.RefreshExpDays = 7
+	}
+	if cfg.File.MaxSizeMB <= 0 {
+		cfg.File.MaxSizeMB = 50
+	}
+	if len(cfg.File.AllowedExts) == 0 {
+		cfg.File.AllowedExts = []string{"jpg", "jpeg", "png", "gif", "webp"}
+	}
 	if cfg.Moment.BigUserFriendThreshold <= 0 {
 		cfg.Moment.BigUserFriendThreshold = 500
 	}
@@ -237,6 +253,12 @@ func (cfg Config) Validate() error {
 	}
 	if !strings.HasPrefix(cfg.Server.WSPath, "/") || !strings.HasPrefix(cfg.Observability.MetricsPath, "/") {
 		return fmt.Errorf("server.ws_path and observability.metrics_path must start with /")
+	}
+	if len(cfg.JWT.Secret) < 32 {
+		return fmt.Errorf("jwt.secret must contain at least 32 characters")
+	}
+	if strings.TrimSpace(cfg.JWT.Issuer) == "" {
+		return fmt.Errorf("jwt.issuer must not be empty")
 	}
 	return nil
 }

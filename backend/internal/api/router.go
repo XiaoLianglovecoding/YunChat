@@ -12,6 +12,7 @@ import (
 
 	"my-im/internal/middleware"
 	"my-im/internal/observability"
+	"my-im/internal/service"
 )
 
 type ReadinessCheck func(context.Context) map[string]error
@@ -26,6 +27,11 @@ type RouterOptions struct {
 	Logger         *zap.Logger
 	Metrics        *observability.Metrics
 	MetricsPath    string
+	Auth           service.AuthService
+	TokenVerifier  middleware.AccessTokenVerifier
+	Profile        service.ProfileService
+	Upload         service.UploadService
+	FileMaxSizeMB  int
 }
 
 // TodoRoute 是从原项目路由表提取出的业务入口。
@@ -147,12 +153,33 @@ func NewRouter(opts RouterOptions) *gin.Engine {
 	})
 	r.GET(opts.MetricsPath, gin.WrapH(opts.Metrics))
 
+	handlers := make(map[string]gin.HandlerFunc)
+	if opts.Auth != nil {
+		authHandler := NewAuthHandler(opts.Auth)
+		handlers[routeKey(http.MethodPost, "/auth/register")] = authHandler.Register
+		handlers[routeKey(http.MethodPost, "/auth/login")] = authHandler.Login
+		handlers[routeKey(http.MethodPost, "/auth/refresh")] = authHandler.Refresh
+		handlers[routeKey(http.MethodPut, "/account/username")] = authHandler.UpdateUsername
+		handlers[routeKey(http.MethodPut, "/account/password")] = authHandler.UpdatePassword
+	}
+	avatarHandler := NewAvatarHandler(opts.Profile, opts.Upload, opts.FileMaxSizeMB)
+	if opts.Profile != nil {
+		handlers[routeKey(http.MethodGet, "/avatar/:userID")] = avatarHandler.GetAvatar
+	}
+	if opts.Upload != nil {
+		handlers[routeKey(http.MethodPost, "/upload/avatar")] = avatarHandler.UploadAvatar
+	}
+
 	v1 := r.Group("/api/v1")
-	registerTodoRoutes(v1, publicRoutes)
+	registerBusinessRoutes(v1, publicRoutes, handlers)
 
 	protected := r.Group("/api/v1")
-	protected.Use(middleware.RequireAuthTODO())
-	registerTodoRoutes(protected, protectedRoutes)
+	if opts.TokenVerifier == nil {
+		protected.Use(middleware.RequireAuthUnavailable())
+	} else {
+		protected.Use(middleware.RequireAuth(opts.TokenVerifier))
+	}
+	registerBusinessRoutes(protected, protectedRoutes, handlers)
 
 	r.GET(opts.WSPath, func(c *gin.Context) {
 		TODO(c, "WS-001", "WebSocket 鉴权、升级、连接生命周期与消息分发")
@@ -167,14 +194,20 @@ func NewRouter(opts RouterOptions) *gin.Engine {
 	return r
 }
 
-func registerTodoRoutes(group *gin.RouterGroup, routes []TodoRoute) {
+func registerBusinessRoutes(group *gin.RouterGroup, routes []TodoRoute, handlers map[string]gin.HandlerFunc) {
 	for _, route := range routes {
 		route := route
+		if handler, ok := handlers[routeKey(route.Method, route.Path)]; ok {
+			group.Handle(route.Method, route.Path, handler)
+			continue
+		}
 		group.Handle(route.Method, route.Path, func(c *gin.Context) {
 			TODO(c, route.TaskID, route.Feature)
 		})
 	}
 }
+
+func routeKey(method, path string) string { return method + " " + path }
 
 func registerSPA(r *gin.Engine, frontendDir string) {
 	if frontendDir == "" {

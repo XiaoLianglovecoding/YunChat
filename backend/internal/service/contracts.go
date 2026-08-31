@@ -26,14 +26,24 @@ type TokenPair struct {
 	AccessToken  string
 	RefreshToken string
 	ExpiresIn    int64
+	AvatarURL    string
 }
 
 type AuthService interface {
-	Register(context.Context, RegisterCommand) (RegisterResult, error) // TODO[AUTH-001]
-	Login(context.Context, LoginCommand) (TokenPair, error)            // TODO[AUTH-002]
-	Refresh(context.Context, string) (TokenPair, error)                // TODO[AUTH-003]
-	UpdateUsername(context.Context, int64, string) (TokenPair, error)  // TODO[AUTH-005]
-	UpdatePassword(context.Context, int64, string, string) error       // TODO[AUTH-006]
+	Register(context.Context, RegisterCommand) (RegisterResult, error)
+	Login(context.Context, LoginCommand) (TokenPair, error)
+	Refresh(context.Context, string) (TokenPair, error)
+	UpdateUsername(context.Context, int64, string) (TokenPair, error)
+	UpdatePassword(context.Context, int64, string, string) error
+}
+
+type AvatarProfile struct {
+	Username  string
+	AvatarURL string
+}
+
+type ProfileService interface {
+	GetAvatar(context.Context, int64) (AvatarProfile, error)
 }
 
 type FriendService interface {
@@ -109,5 +119,5 @@ type UploadResult struct {
 }
 
 type UploadService interface {
-	UploadAvatar(context.Context, int64, string, io.Reader) (UploadResult, error) // TODO[UPLOAD-001]
+	UploadAvatar(context.Context, int64, string, io.Reader) (UploadResult, error)
 }

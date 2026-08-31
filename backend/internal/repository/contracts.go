@@ -23,6 +23,9 @@ type MySQLRepository interface {
 	GetUserByUsername(context.Context, string) (*model.User, error)
 	CreateUser(context.Context, *model.User) error
 	UpdateUser(context.Context, *model.User) error
+	UpdateUsername(context.Context, int64, string, string) error
+	UpdatePasswordHash(context.Context, int64, string) error
+	UpdateAvatarURL(context.Context, int64, string) error
 
 	CreateFriendRequest(context.Context, *model.FriendRequest) error
 	UpdateFriendRequest(context.Context, *model.FriendRequest) error

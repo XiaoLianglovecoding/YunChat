@@ -1,6 +1,6 @@
 # my_IM
 
-这是基于本地开源项目 `E:\IT\IM` 重建的学习型 IM 工程骨架。前端以逐文件复制为基线并统一了 MyIM 品牌；后端保留原项目的分层、数据模型、HTTP/WebSocket 契约与数据边界，基础设施已经实现，业务 Service 仍使用 TODO 占位。
+这是基于本地开源项目 `E:\IT\IM` 重建的学习型 IM 项目。前端以逐文件复制为基线并统一了 MyIM 品牌；后端保留原项目的分层、数据模型、HTTP/WebSocket 契约与数据边界。工程基础设施以及账户、JWT 鉴权、刷新令牌轮换和头像链路已经实现，其余社交业务仍使用 TODO 占位。
 
 ## 当前状态
 
@@ -11,20 +11,22 @@
 | 健康检查 | `GET /health` 返回 200 |
 | 业务 HTTP 契约 | 原 42 个路由全部注册 |
 | WebSocket 入口 | `GET /ws` 已注册 |
-| 业务逻辑 | 统一 `TODO[任务编号]` 占位 |
-| 受保护接口 | 默认被 `AUTH-004` 中间件关闭，防止未鉴权误开放 |
+| 账户与鉴权 | 注册、登录、刷新轮换、修改用户名/密码已实现 |
+| 头像 | 安全上传、资料更新、公开读取与静态文件访问已实现 |
+| 其余业务逻辑 | 保留 `TODO[任务编号]` 占位 |
+| 受保护接口 | 全部经过真实 JWT 中间件；无效或缺失 Token 返回 401 |
 | MySQL | 版本化迁移、连接池、事务 Repository；13 张上游表 + 1 张用户消息状态表 |
 | Redis | 客户端、Repository、6 个单一来源 Lua、SHA 预加载与健康检查 |
 | RabbitMQ | 4 个实际队列、DLQ、Confirm、mandatory、超时与有限重试 |
 | 可观测性 | JSON 日志、Request ID、`/metrics`、本机 pprof |
 
-`GET /ready` 会真实检查 MySQL、Redis、RabbitMQ，只有三者都可用才返回 200。尚未实现的公开业务路由仍返回 HTTP 501 和前端认识的响应信封：
+`GET /ready` 会真实检查 MySQL、Redis、RabbitMQ，只有三者都可用才返回 200。注册成功使用统一响应信封：
 
 ```json
 {
   "code": 1900,
-  "message": "TODO[AUTH-001]: 用户注册",
-  "data": {"task_id": "AUTH-001", "feature": "用户注册"}
+  "message": "ok",
+  "data": {"user_id": 1, "username": "alice"}
 }
 ```
 
@@ -37,8 +39,9 @@ my_IM/
 │   ├── cmd/server|migrate/      # 服务入口与迁移 up/status 命令
 │   ├── configs/                 # 本地、示例、Docker 配置
 │   ├── internal/
-│   │   ├── api/                 # 42 个业务路由 + TODO 响应
-│   │   ├── service/             # 用例接口与 TODO 编号
+│   │   ├── api/                 # HTTP Handler、42 个业务路由与剩余 TODO
+│   │   ├── auth|middleware/     # JWT 签发、校验和身份注入
+│   │   ├── service/             # 账户/头像用例与后续业务接口
 │   │   ├── repository/          # MySQL、Redis、MQ 端口
 │   │   ├── model/               # 原数据模型
 │   │   ├── protocol/            # WebSocket 信封协议
@@ -80,10 +83,10 @@ go run ./cmd/server -c configs/config.local.yaml
 
 ```powershell
 Invoke-RestMethod 'http://localhost:18080/health'
-Invoke-WebRequest 'http://localhost:18080/api/v1/auth/register' -Method Post
+Invoke-RestMethod 'http://localhost:18080/api/v1/auth/register' -Method Post -ContentType 'application/json' -Body '{"username":"alice","password":"secret1"}'
 ```
 
-还可以执行 `Invoke-RestMethod 'http://localhost:18080/ready'`；三项依赖正常时返回 200。业务请求返回 501 仍是当前阶段的预期行为。
+还可以执行 `Invoke-RestMethod 'http://localhost:18080/ready'`；三项依赖正常时返回 200。账户和头像端点可真实使用，好友、群组、消息、动态和设置端点通过鉴权后仍返回 501。
 
 ### 3. 启动前端
 
@@ -105,7 +108,7 @@ Set-Location 'E:\IT\my_IM'
 docker compose --profile full-stack up -d --build
 ```
 
-该方式构建前端和后端，并由 Gin 托管 SPA；它仍是业务返回 501 的骨架服务。
+该方式构建前端和后端，并由 Gin 托管 SPA。
 
 ### 5. 一键代码校验
 
@@ -124,6 +127,7 @@ powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\scripts\verify.ps1 -In
 
 - [业务开发任务清单](DEVELOPMENT_TASKS.md)：实施顺序、依赖和验收标准。
 - [工程与基础设施小白教程](docs/FOUNDATION_TUTORIAL.md)：本阶段代码的逐层原理、命令与故障实验。
+- [账户与鉴权小白教程](docs/AUTH_TUTORIAL.md)：从密码哈希、JWT、Redis 轮换到头像上传的完整讲解。
 - [架构说明](docs/ARCHITECTURE.md)：模块边界、目标数据流和源码/文档漂移。
 - [数据库与中间件契约](docs/DATABASE.md)：13 张表、Redis 键、MQ 队列和一致性风险。
 - [前端复制与联调说明](docs/FRONTEND_COPY.md)：复制范围、环境变量和后端耦合点。

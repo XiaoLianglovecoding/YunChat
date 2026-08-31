@@ -17,7 +17,7 @@ interface AuthState {
   previewMode: boolean;
   setSession: (response: LoginResponse, fallbackUsername?: string) => void;
   enterPreview: () => void;
-  updateAccessToken: (accessToken: string, expiresIn: number) => void;
+  rotateSession: (response: LoginResponse) => void;
   clearSession: () => void;
   setAvatarUrl: (avatarUrl: string) => void;
 }
@@ -70,13 +70,21 @@ export const useAuthStore = create<AuthState>()(
         user: { id: 10086, username: "顾言" },
         previewMode: true,
       }),
-      updateAccessToken: (accessToken, expiresIn) => {
-        const claims = decodeAccessToken(accessToken);
+      // 一次 set 同时替换 access/refresh，避免持久化一半新、一半旧的令牌。
+      rotateSession: (response) => {
+        const claims = decodeAccessToken(response.access_token);
         set((state) => ({
-          accessToken,
-          accessTokenExpiresAt: claims?.exp ? claims.exp * 1000 : Date.now() + expiresIn * 1000,
+          accessToken: response.access_token,
+          refreshToken: response.refresh_token,
+          accessTokenExpiresAt: claims?.exp ? claims.exp * 1000 : Date.now() + response.expires_in * 1000,
           user: claims?.user_id
-            ? { id: claims.user_id, username: claims.username ?? state.user?.username ?? "用户", avatarUrl: state.user?.avatarUrl }
+            ? {
+                id: claims.user_id,
+                username: claims.username ?? state.user?.username ?? "用户",
+                avatarUrl: response.avatar_url
+                  ? (response.avatar_url.startsWith("http") ? response.avatar_url : `${env.staticBaseUrl}${response.avatar_url}`)
+                  : state.user?.avatarUrl,
+              }
             : state.user,
         }));
       },

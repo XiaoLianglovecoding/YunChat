@@ -81,10 +81,36 @@ cmd/server -> api/ws -> service -> repository ports
 
 普通用户发布后写个人寄件箱并通过 `moment_push` 扇出到好友 `timeline`；大用户只写寄件箱，读取时将收件箱与关注的大用户寄件箱合并。点赞在 Redis 原子变更，经 `like_persist` 批量落库。
 
-## 骨架期安全策略
+### 账户与鉴权
 
-- 公开业务路由返回结构化 501。
-- 所有受保护路由先被 `AUTH-004` 中间件拒绝，避免“先写 Handler、忘记加鉴权”。
+```text
+注册/登录
+  -> AuthHandler：只处理 HTTP DTO
+  -> AuthService：校验、bcrypt、业务错误
+  -> MySQL users（账户真相）
+  -> Token Manager：签发 access + refresh
+  -> Redis refresh:{jti} + refresh_user:{uid}
+
+保护路由
+  -> Authorization: Bearer <access_token>
+  -> JWT 中间件：算法/签名/issuer/exp/token_type
+  -> 强类型 UserID 注入 Gin Context
+  -> 对应业务 Handler
+
+刷新
+  -> 验证 refresh JWT
+  -> Redis WATCH 原子删除旧 jti、写新 jti
+  -> 返回新 access + 新 refresh
+  -> 旧 refresh 再次使用返回 1106
+```
+
+## 当前安全策略
+
+- 注册、登录、刷新和公开头像读取无需 access token；其余 38 个业务路由统一经过 JWT 中间件。
+- 未实现的受保护业务只有在鉴权成功后才返回结构化 501，缺失或无效 Token 先返回 401。
+- 登录对不存在用户执行 dummy bcrypt；客户端只看到统一的 1105，不泄露账号是否存在。
+- refresh token 在 Redis 一次性轮换；改名和改密会按用户索引撤销旧刷新会话。
+- 头像同时校验扩展名、MIME 和大小，使用随机名、路径边界校验与同目录原子 Rename。
 - `/ready` 只有在 MySQL、Redis、RabbitMQ 全部可用时返回 200。
 - 6 个 Lua 脚本只有一套 Go 内来源，启动预加载并核对 SHA。
 

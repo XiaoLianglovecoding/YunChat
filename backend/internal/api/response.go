@@ -85,6 +85,10 @@ func WriteError(c *gin.Context, err error) {
 	c.JSON(appErr.HTTPStatus, Response{Code: int(appErr.Code), Message: appErr.Message})
 }
 
+func WriteSuccess(c *gin.Context, status int, data interface{}) {
+	c.JSON(status, Response{Code: int(apperror.CodeSuccess), Message: "ok", Data: data})
+}
+
 func TODO(c *gin.Context, taskID, feature string) {
 	err := apperror.WithMessage(apperror.CodeNotImplemented, "TODO["+taskID+"]: "+feature)
 	c.JSON(http.StatusNotImplemented, Response{

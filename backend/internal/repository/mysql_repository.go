@@ -154,6 +154,48 @@ func (m *MySQLRepoImpl) UpdateUser(ctx context.Context, user *model.User) error 
 	return nil
 }
 
+// UpdateUsername 只修改与用户名相关的列，避免并发头像/密码更新时发生“整行旧值覆盖”。
+// nickname 仍等于旧用户名时才随用户名一起变化，用户自定义昵称不会被改掉。
+func (m *MySQLRepoImpl) UpdateUsername(ctx context.Context, userID int64, oldUsername, newUsername string) error {
+	query := `UPDATE users SET username=?, nickname=IF(nickname=?, ?, nickname) WHERE id=?`
+	result, err := m.db.ExecContext(ctx, query, newUsername, oldUsername, newUsername, userID)
+	if err != nil {
+		return fmt.Errorf("更新用户名: %w", err)
+	}
+	if affected, err := result.RowsAffected(); err != nil {
+		return fmt.Errorf("更新用户名 获取影响行数: %w", err)
+	} else if affected == 0 {
+		return ErrNotFound
+	}
+	return nil
+}
+
+func (m *MySQLRepoImpl) UpdatePasswordHash(ctx context.Context, userID int64, passwordHash string) error {
+	result, err := m.db.ExecContext(ctx, `UPDATE users SET password_hash=? WHERE id=?`, passwordHash, userID)
+	if err != nil {
+		return fmt.Errorf("更新密码哈希: %w", err)
+	}
+	if affected, err := result.RowsAffected(); err != nil {
+		return fmt.Errorf("更新密码哈希 获取影响行数: %w", err)
+	} else if affected == 0 {
+		return ErrNotFound
+	}
+	return nil
+}
+
+func (m *MySQLRepoImpl) UpdateAvatarURL(ctx context.Context, userID int64, avatarURL string) error {
+	result, err := m.db.ExecContext(ctx, `UPDATE users SET avatar_url=? WHERE id=?`, avatarURL, userID)
+	if err != nil {
+		return fmt.Errorf("更新头像地址: %w", err)
+	}
+	if affected, err := result.RowsAffected(); err != nil {
+		return fmt.Errorf("更新头像地址 获取影响行数: %w", err)
+	} else if affected == 0 {
+		return ErrNotFound
+	}
+	return nil
+}
+
 // ── 好友（在任务 13 中实现） ──
 
 func (m *MySQLRepoImpl) CreateFriendRequest(ctx context.Context, req *model.FriendRequest) error {
