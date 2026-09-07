@@ -30,6 +30,12 @@
 | `syncBatch` | `{ msgs, hasMore, syncTime, syncMsgId? }` | 合并消息并将 `syncTime + syncMsgId` 作为下一批复合游标；`hasMore=true` 时携带二者继续请求。|
 | `convSync` | `{ conversations, unreadMap }` | 用服务端会话摘要和未读数覆盖或合并本地状态。|
 | `msgRevoked` | `{ convId, serverMsgId, operatorId }` | 将对应消息替换为撤回占位状态。|
+| `friendApply` | `{ requestId, fromUserId, username, avatarUrl?, message, createdAt }` | 失效好友申请 Query，并通过 HTTP 重新读取。|
+| `friendAccepted` | `{ requestId, userId, friendId, username, avatarUrl? }` | 失效好友/申请 Query，并补齐私聊会话身份。|
+| `presence` | `{ userId, online }` | 更新好友与私聊会话的在线状态。|
+| `groupAdded` | `{ groupId, name }` | 增加群会话，并失效群资料/成员 Query；成员邀请 producer 尚待接入。|
+| `groupRemoved` | `{ groupId, reason: "removed" | "left" }` | 删除群会话及对应群 Query；当前 GROUP-004 发送 `left`，成员移除的 `removed` producer 尚待接入。|
+| `groupUpdated` | `{ groupId, reason: "owner_transferred" | "member_left" }` | 失效群资料与成员 Query，随后从 HTTP 权威数据刷新。|
 | `error` | `{ code, message }` | 将待发送消息标记失败；`4001~4003` 为私聊错误，`5001~5003` 为群聊错误。|
 | `kick` | `{ type, reason }` | 清除令牌、关闭连接并跳转登录。|
 
@@ -43,6 +49,8 @@
 4. 收到 `msg` 后写入本地、发送 `deliverAck`；用户查看该会话后发送 `readAck`。
 5. 重连时先完成 `syncBatch` 分页，每页同时推进 `syncTime + syncMsgId` 复合游标，再处理 `convSync`；按 `msgId`/`serverMsgId` 去重。
 
-## 未纳入 v1 的消息
+## 可靠性边界
 
-`friendApply`、`friendAccepted`、`presence` 和应用层 `ping`/`pong` 尚无服务端业务实现，不属于前端 v1 契约。好友操作使用 HTTP API。
+好友与群变更帧是 MySQL 提交后的即时刷新提示，不代替 HTTP 权威数据。用户离线或 WS 丢帧时，首次连接/重连会刷新好友、申请和群列表；`groupUpdated` 到达后也只让相关 Query 失效，再通过 HTTP 获取真实 owner/role。当前 Hub 只覆盖单应用实例，跨实例 fanout 留给后续 WS/OPS 任务。
+
+应用层 `ping`/`pong` 当前不使用；连接保活依靠 WebSocket 原生 Ping/Pong 控制帧。

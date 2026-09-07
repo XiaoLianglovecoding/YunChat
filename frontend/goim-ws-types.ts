@@ -58,6 +58,7 @@ export const ServerMsgType = {
   Presence:       "presence",
   GroupRemoved:   "groupRemoved",
   GroupAdded:     "groupAdded",
+  GroupUpdated:   "groupUpdated",
   Kick:           "kick",
   Error:          "error",
 } as const;
@@ -160,12 +161,17 @@ export interface KickNotification {
 
 export interface GroupRemovedNotification {
   groupId: number;
-  reason: "removed";
+  reason: "removed" | "left";
 }
 
 export interface GroupAddedNotification {
   groupId: number;
   name: string;
+}
+
+export interface GroupUpdatedNotification {
+  groupId: number;
+  reason: "owner_transferred" | "member_left";
 }
 
 /** 好友申请 (通过WS) */
@@ -227,6 +233,7 @@ export type ServerWsMessage =
   | { type: "kick"; reason: KickNotification["reason"] }
   | { type: "groupRemoved"; data: GroupRemovedNotification }
   | { type: "groupAdded"; data: GroupAddedNotification }
+  | { type: "groupUpdated"; data: GroupUpdatedNotification }
   | { type: "error"; data: WsError };
 
 // ──────────────────────────────────────────────────────

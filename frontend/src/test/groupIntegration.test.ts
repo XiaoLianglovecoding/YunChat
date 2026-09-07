@@ -1,8 +1,10 @@
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { waitFor } from "@testing-library/react";
 import type { Group, GroupMember } from "../../goim-api-types";
-import { refreshGroupConversations } from "../components/realtime/RealtimeBootstrap";
+import { handleConnectionState, handleServerMessage, refreshGroupConversations } from "../components/realtime/RealtimeBootstrap";
 import { canManageGroupProfile } from "../features/groups/GroupManagement";
 import { groupsApi } from "../lib/api";
+import { queryClient } from "../lib/queryClient";
 import { useChatStore } from "../stores/chatStore";
 
 const group: Group = {
@@ -15,8 +17,11 @@ const group: Group = {
   updated_at: "2026-08-31T12:00:00Z",
 };
 
-describe("GROUP-001 frontend integration", () => {
+describe("group frontend integration", () => {
+  afterEach(() => vi.restoreAllMocks());
+
   beforeEach(() => {
+    queryClient.clear();
     useChatStore.setState({
       mode: null,
       liveUserId: null,
@@ -67,6 +72,77 @@ describe("GROUP-001 frontend integration", () => {
     await refresh;
 
     expect(useChatStore.getState().liveUserId).toBe(2);
+    expect(useChatStore.getState().conversations).toEqual([]);
+  });
+
+  it("invalidates group truth when ownership or membership changes over WebSocket", () => {
+    const invalidate = vi.spyOn(queryClient, "invalidateQueries").mockResolvedValue();
+
+    handleServerMessage({
+      type: "groupUpdated",
+      data: { groupId: 22, reason: "owner_transferred" },
+    }, 1, () => undefined);
+
+    expect(invalidate).toHaveBeenCalledWith({ queryKey: ["group", 22] });
+    expect(invalidate).toHaveBeenCalledWith({ queryKey: ["group-members", 22] });
+  });
+
+  it("removes the conversation and stale group queries after a leave notification", () => {
+    useChatStore.getState().initializeLive(1);
+    useChatStore.getState().addGroupConversation(22, group.name);
+    queryClient.setQueryData(["group", 22], group);
+    queryClient.setQueryData(["group-members", 22], { items: [], total: 0 });
+    vi.spyOn(groupsApi, "list").mockResolvedValue([]);
+
+    handleServerMessage({
+      type: "groupRemoved",
+      data: { groupId: 22, reason: "left" },
+    }, 1, () => undefined);
+
+    expect(useChatStore.getState().conversations).toHaveLength(0);
+    expect(queryClient.getQueryData(["group", 22])).toBeUndefined();
+    expect(queryClient.getQueryData(["group-members", 22])).toBeUndefined();
+  });
+
+  it("prunes group conversations that are absent from an authoritative group-list refresh", async () => {
+    useChatStore.getState().initializeLive(1);
+    useChatStore.getState().addGroupConversation(22, group.name);
+    useChatStore.getState().addGroupConversation(23, "已经退出的群");
+    queryClient.setQueryData(["group", 23], { ...group, id: 23 });
+    vi.spyOn(groupsApi, "list").mockResolvedValue([group]);
+
+    await refreshGroupConversations(1);
+
+    expect(useChatStore.getState().conversations.map((conversation) => conversation.id)).toEqual(["g_22"]);
+    expect(queryClient.getQueryData(["group", 23])).toBeUndefined();
+  });
+
+  it("revalidates the authoritative group list after WebSocket reconnect", async () => {
+    useChatStore.getState().initializeLive(1);
+    useChatStore.getState().addGroupConversation(23, "断线期间退出的群");
+    const list = vi.spyOn(groupsApi, "list").mockResolvedValue([]);
+
+    handleConnectionState("connected");
+
+    await waitFor(() => expect(list).toHaveBeenCalledOnce());
+    await waitFor(() => expect(useChatStore.getState().conversations).toEqual([]));
+  });
+
+  it("ignores an older same-user group-list response that finishes last", async () => {
+    useChatStore.getState().initializeLive(1);
+    let resolveOlder!: (groups: Group[]) => void;
+    let resolveNewer!: (groups: Group[]) => void;
+    vi.spyOn(groupsApi, "list")
+      .mockImplementationOnce(() => new Promise<Group[]>((resolve) => { resolveOlder = resolve; }))
+      .mockImplementationOnce(() => new Promise<Group[]>((resolve) => { resolveNewer = resolve; }));
+
+    const older = refreshGroupConversations(1);
+    const newer = refreshGroupConversations(1);
+    resolveNewer([]);
+    await newer;
+    resolveOlder([group]);
+    await older;
+
     expect(useChatStore.getState().conversations).toEqual([]);
   });
 });

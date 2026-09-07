@@ -27,6 +27,8 @@ type groupServiceStub struct {
 	listMembers  func(context.Context, int64, int64, int, int) (service.Page[service.GroupMemberListItem], error)
 	updateRole   func(context.Context, int64, int64, int64, int) error
 	muteMember   func(context.Context, int64, int64, int64, *time.Time) error
+	transfer     func(context.Context, int64, int64, int64) error
+	leave        func(context.Context, int64, int64) error
 }
 
 func (s groupServiceStub) Create(ctx context.Context, ownerID int64, name, notice string) (int64, error) {
@@ -63,6 +65,14 @@ func (s groupServiceStub) UpdateRole(ctx context.Context, groupID, operatorID, m
 
 func (s groupServiceStub) MuteMember(ctx context.Context, groupID, operatorID, memberID int64, mutedUntil *time.Time) error {
 	return s.muteMember(ctx, groupID, operatorID, memberID, mutedUntil)
+}
+
+func (s groupServiceStub) TransferOwnership(ctx context.Context, groupID, operatorID, newOwnerID int64) error {
+	return s.transfer(ctx, groupID, operatorID, newOwnerID)
+}
+
+func (s groupServiceStub) Leave(ctx context.Context, groupID, userID int64) error {
+	return s.leave(ctx, groupID, userID)
 }
 
 func TestGroupCreateReturnsCreatedGroupID(t *testing.T) {
@@ -494,6 +504,8 @@ func completeGroupStub() groupServiceStub {
 		},
 		updateRole: func(context.Context, int64, int64, int64, int) error { return nil },
 		muteMember: func(context.Context, int64, int64, int64, *time.Time) error { return nil },
+		transfer:   func(context.Context, int64, int64, int64) error { return nil },
+		leave:      func(context.Context, int64, int64) error { return nil },
 	}
 }
 

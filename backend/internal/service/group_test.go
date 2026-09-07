@@ -497,14 +497,18 @@ type fakeGroupRepository struct {
 	mutationOutsideTransaction bool
 	addMemberErr               error
 	removeMemberErr            error
+	updateOwnerErr             error
 	updateRoleErr              error
+	updateRoleErrForUser       map[int64]error
 	updateMuteErr              error
 	lockUsersErr               error
 	friendshipErr              error
 	countMembersErr            error
+	getMembersErr              error
 	listMembersErr             error
 	enqueueErr                 error
 	lastListUserID             int64
+	lockCalls                  []string
 	lastMemberPage             struct {
 		groupID       int64
 		limit, offset int
@@ -584,6 +588,7 @@ func (r *fakeGroupRepository) GetGroupByID(_ context.Context, groupID int64) (*m
 }
 
 func (r *fakeGroupRepository) GetGroupForUpdate(ctx context.Context, groupID int64) (*model.Group, error) {
+	r.lockCalls = append(r.lockCalls, fmt.Sprintf("group:%d", groupID))
 	return r.GetGroupByID(ctx, groupID)
 }
 
@@ -597,6 +602,7 @@ func (r *fakeGroupRepository) GetGroupMember(_ context.Context, groupID, userID 
 }
 
 func (r *fakeGroupRepository) GetGroupMemberForUpdate(ctx context.Context, groupID, userID int64) (*model.GroupMember, error) {
+	r.lockCalls = append(r.lockCalls, fmt.Sprintf("member:%d:%d", groupID, userID))
 	return r.GetGroupMember(ctx, groupID, userID)
 }
 
@@ -640,6 +646,20 @@ func (r *fakeGroupRepository) CountGroupMembers(_ context.Context, groupID int64
 	return total, nil
 }
 
+func (r *fakeGroupRepository) GetGroupMembers(_ context.Context, groupID int64) ([]model.GroupMember, error) {
+	if r.getMembersErr != nil {
+		return nil, r.getMembersErr
+	}
+	members := make([]model.GroupMember, 0)
+	for key, member := range r.members {
+		if key.groupID == groupID {
+			members = append(members, member)
+		}
+	}
+	sort.Slice(members, func(i, j int) bool { return members[i].UserID < members[j].UserID })
+	return members, nil
+}
+
 func (r *fakeGroupRepository) RemoveGroupMember(_ context.Context, groupID, userID int64) error {
 	r.markMutation()
 	if r.removeMemberErr != nil {
@@ -649,10 +669,24 @@ func (r *fakeGroupRepository) RemoveGroupMember(_ context.Context, groupID, user
 	return nil
 }
 
+func (r *fakeGroupRepository) UpdateGroupOwner(_ context.Context, groupID, ownerID int64) error {
+	r.markMutation()
+	if r.updateOwnerErr != nil {
+		return r.updateOwnerErr
+	}
+	group := r.groups[groupID]
+	group.OwnerID = ownerID
+	r.groups[groupID] = group
+	return nil
+}
+
 func (r *fakeGroupRepository) UpdateGroupMemberRole(_ context.Context, groupID, userID int64, role int) error {
 	r.markMutation()
 	if r.updateRoleErr != nil {
 		return r.updateRoleErr
+	}
+	if err := r.updateRoleErrForUser[userID]; err != nil {
+		return err
 	}
 	key := groupMemberKey{groupID: groupID, userID: userID}
 	member := r.members[key]

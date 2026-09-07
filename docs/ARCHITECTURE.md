@@ -40,11 +40,11 @@ cmd/server -> api/ws -> service -> repository ports
 
 | 模块 | 当前骨架 | 最终职责 |
 | --- | --- | --- |
-| `api` | 账户/头像/好友/群资料 Handler，其余路由 501 | DTO、参数校验、调用 Service、错误映射 |
+| `api` | 账户/头像/好友/群管理 Handler，其余路由 501 | DTO、参数校验、调用 Service、错误映射 |
 | `middleware` | CORS、JWT、请求日志/指标 | JWT、限流、追踪、恢复 |
-| `service` | 账户、头像、好友、群资料、缓存真相用例 | 权限、事务编排、缓存一致性 |
+| `service` | 账户、头像、好友、群管理、缓存真相用例 | 权限、事务编排、缓存一致性 |
 | `repository` | MySQL/Redis/MQ 接口 | 隔离存储和消息中间件 |
-| `ws` | JWT 升级、单连接替换、心跳租约、好友事件 | 补齐聊天帧分派和错误信封 |
+| `ws` | JWT 升级、单连接替换、心跳租约、好友与群变更事件 | 补齐聊天帧分派和跨实例 fanout |
 | `conn` | 保留的包边界 | 后续按规模决定是否从 `ws.Hub` 拆出连接管理器 |
 | `consumer` | 4 个实际队列名 | 手动 ACK、幂等消费、消费失败计数 |
 | `infra` | MySQL/Redis/RabbitMQ、DLQ、Confirm、健康检查 | 客户端初始化、可靠发布、反序关闭 |
@@ -185,6 +185,25 @@ PUT/DELETE /group/:groupID/member/:memberID/mute
 
 禁言保存绝对截止时间而非永久布尔值。群消息 Lua 使用 Redis `TIME` 与缓存中的 Unix 毫秒 `muted_until` 比较，仍在期限内返回 `5002`，到期后无需定时任务即可自动放行。`group_member_loaded:{gid}` 保存预期成员数；`EnsureGroupAccess` 同时比较成员 Set 和信息 Hash 的数量，任一独立丢失都会回源。若检查后到 Lua 执行前 Hash field 又消失，Lua 也会 fail-closed，避免把缺失元数据误当作“未禁言”。详见 `docs/GROUP_ROLE_MUTE_TUTORIAL.md`。
 
+### 群主转让与退群
+
+```text
+PUT /group/:groupID/owner
+  -> 锁 groups -> 旧群主 member -> 新群主 member
+  -> 校验操作者等于真实 owner_id，目标已经在群内
+  -> 旧群主 role=0 + 新群主 role=2/解除禁言 + groups.owner_id 更新
+  -> 同事务写 group_members 协调事件
+  -> COMMIT 后重建 Redis，并向当前成员发送 groupUpdated
+
+POST /group/:groupID/leave
+  -> 锁 groups -> 自己的 member
+  -> 真实群主返回 1306；管理员/普通成员删除自己的成员行
+  -> 同事务写协调事件，COMMIT 后重建 Redis
+  -> 退出者收到 groupRemoved，剩余成员收到 groupUpdated
+```
+
+群主转让的 `owner_id`、旧角色和新角色必须一起提交，任何一步失败都回滚；新群主同时解除已有禁言，避免产生无人可以解禁的真实群主。Redis 与 WebSocket 都是提交后的投影/提示：Redis 失败由协调事件重试，WS 丢帧由 HTTP 群列表、详情和成员列表补偿。当前 Hub 仅推送本实例在线连接，不宣称跨实例可靠通知。完整说明见 `docs/GROUP_TRANSFER_LEAVE_TUTORIAL.md`。
+
 启动预热调用 `CacheTruthService.Warm`，沿用有界 owner index；运维 `cachectl rebuild` 调用严格 `Rebuild`，会在资源锁内重置索引 marker，并通过增量 SCAN 清理索引外人工孤儿。这样日常请求不承担全库扫描成本，显式修复又能兑现审计结果。
 
 ## 当前安全策略
@@ -212,7 +231,7 @@ PUT/DELETE /group/:groupID/member/:memberID/mute
 | `group_read_pos:{uid}:{gid}` | `group_read_pos:{uid}` Hash，field 是 convID |
 | Lua 同时写收件箱/未读 | 当前消息 Lua 主要做检查、去重和 ID；Consumer 写收件箱 |
 | 所有写都 Redis 优先、MQ 落库 | 账户、好友、群组、动态主体、评论、设置大量同步写 MySQL |
-| Go/TS WebSocket 类型已同步 | 第三阶段已同步 friendApply/friendAccepted/presence 和 groupAdded/groupRemoved 常量/联合类型 |
+| Go/TS WebSocket 类型已同步 | 已同步 friendApply/friendAccepted/presence 和 groupAdded/groupRemoved/groupUpdated 常量与联合类型 |
 
 第三阶段已经修复：
 

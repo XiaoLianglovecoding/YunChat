@@ -52,6 +52,7 @@ const (
 	TypePresence       = "presence"
 	TypeGroupAdded     = "groupAdded"
 	TypeGroupRemoved   = "groupRemoved"
+	TypeGroupUpdated   = "groupUpdated"
 	TypeError          = "error"
 	TypePing           = "ping"
 	TypePong           = "pong"

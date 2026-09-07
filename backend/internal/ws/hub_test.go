@@ -15,6 +15,7 @@ import (
 	"github.com/gorilla/websocket"
 
 	authtoken "my-im/internal/auth"
+	"my-im/internal/model"
 	"my-im/internal/protocol"
 )
 
@@ -118,6 +119,43 @@ func TestHubAuthenticatesAndPushesTypedEvent(t *testing.T) {
 	readJSON(t, connection, &frame)
 	if frame.Type != protocol.TypeFriendApply || frame.Data.RequestID != 12 || frame.Data.FromUserID != 1 {
 		t.Fatalf("unexpected frame: %+v", frame)
+	}
+}
+
+func TestHubPushesGroupLifecycleEvents(t *testing.T) {
+	hub, manager, server := newHubTestServer(t, memoryFriends{})
+	defer hub.Close()
+	defer server.Close()
+
+	newOwner := dialUser(t, server.URL, issueAccess(t, manager, 21, "new-owner"))
+	defer newOwner.Close()
+	leavingMember := dialUser(t, server.URL, issueAccess(t, manager, 22, "leaving-member"))
+	defer leavingMember.Close()
+
+	updated := model.GroupUpdatedNotification{GroupID: 31, Reason: model.GroupUpdatedReasonOwnerTransferred}
+	if err := hub.NotifyGroupEvent(context.Background(), 21, protocol.TypeGroupUpdated, updated); err != nil {
+		t.Fatal(err)
+	}
+	var updatedFrame struct {
+		Type string                         `json:"type"`
+		Data model.GroupUpdatedNotification `json:"data"`
+	}
+	readJSON(t, newOwner, &updatedFrame)
+	if updatedFrame.Type != protocol.TypeGroupUpdated || updatedFrame.Data != updated {
+		t.Fatalf("unexpected group-updated frame: %+v", updatedFrame)
+	}
+
+	removed := model.GroupRemovedNotification{GroupID: 31, Reason: model.GroupRemovedReasonLeft}
+	if err := hub.NotifyGroupEvent(context.Background(), 22, protocol.TypeGroupRemoved, removed); err != nil {
+		t.Fatal(err)
+	}
+	var removedFrame struct {
+		Type string                         `json:"type"`
+		Data model.GroupRemovedNotification `json:"data"`
+	}
+	readJSON(t, leavingMember, &removedFrame)
+	if removedFrame.Type != protocol.TypeGroupRemoved || removedFrame.Data != removed {
+		t.Fatalf("unexpected group-removed frame: %+v", removedFrame)
 	}
 }
 

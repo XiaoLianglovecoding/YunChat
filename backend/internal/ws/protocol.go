@@ -29,6 +29,7 @@ const (
 	TypePresence       = protocol.TypePresence
 	TypeGroupAdded     = protocol.TypeGroupAdded
 	TypeGroupRemoved   = protocol.TypeGroupRemoved
+	TypeGroupUpdated   = protocol.TypeGroupUpdated
 	TypeError          = protocol.TypeError
 	TypePing           = protocol.TypePing
 	TypePong           = protocol.TypePong

@@ -109,7 +109,10 @@ func run(configPath string) error {
 	if err != nil {
 		return fmt.Errorf("initialize friend service: %w", err)
 	}
-	groupService, err := service.NewGroupService(mysqlRepo, service.WithGroupCache(cacheTruth))
+	groupService, err := service.NewGroupService(mysqlRepo,
+		service.WithGroupCache(cacheTruth),
+		service.WithGroupEventNotifier(websocketHub),
+	)
 	if err != nil {
 		return fmt.Errorf("initialize group service: %w", err)
 	}

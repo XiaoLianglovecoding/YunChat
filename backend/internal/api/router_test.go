@@ -55,7 +55,7 @@ func TestPublicBusinessRouteReturnsTodo(t *testing.T) {
 	}
 }
 
-func TestBusinessRouteCountIncludesGroupMuteExtensions(t *testing.T) {
+func TestBusinessRouteCountIncludesGroupLifecycleRoutes(t *testing.T) {
 	if got, want := len(BusinessRoutes()), 44; got != want {
 		t.Fatalf("business route count = %d, want %d", got, want)
 	}
@@ -111,7 +111,7 @@ func TestEveryProtectedRouteRequiresAuthorization(t *testing.T) {
 	}
 }
 
-func TestCompletedGroupRoutesReplaceTodoWithoutOpeningGroup004(t *testing.T) {
+func TestCompletedGroupRoutesReplaceTodoThroughGroup004(t *testing.T) {
 	router, token := groupTestRouter(t, completeGroupStub())
 	for _, request := range []struct {
 		method string
@@ -124,24 +124,12 @@ func TestCompletedGroupRoutesReplaceTodoWithoutOpeningGroup004(t *testing.T) {
 		{method: http.MethodPut, path: "/api/v1/group/9/member/8/role", body: `{"role":1}`},
 		{method: http.MethodPut, path: "/api/v1/group/9/member/8/mute", body: `{"muted_until":"2099-01-01T00:00:00Z"}`},
 		{method: http.MethodDelete, path: "/api/v1/group/9/member/8/mute"},
-	} {
-		recorder := serveGroupRequest(router, token, request.method, request.path, request.body)
-		if recorder.Code != http.StatusOK {
-			t.Fatalf("%s %s status=%d body=%s, want completed group handler", request.method, request.path, recorder.Code, recorder.Body.String())
-		}
-	}
-
-	for _, request := range []struct {
-		method string
-		path   string
-		body   string
-	}{
 		{method: http.MethodPut, path: "/api/v1/group/9/owner", body: `{"new_owner_id":8}`},
 		{method: http.MethodPost, path: "/api/v1/group/9/leave"},
 	} {
 		recorder := serveGroupRequest(router, token, request.method, request.path, request.body)
-		if recorder.Code != http.StatusNotImplemented {
-			t.Fatalf("%s %s status=%d body=%s, want later task to remain 501", request.method, request.path, recorder.Code, recorder.Body.String())
+		if recorder.Code != http.StatusOK {
+			t.Fatalf("%s %s status=%d body=%s, want completed group handler", request.method, request.path, recorder.Code, recorder.Body.String())
 		}
 	}
 }

@@ -137,6 +137,8 @@ GROUP-002 成员添加/移除沿用同一规则。事务必须先 `SELECT groups
 
 GROUP-003 的角色与禁言仍然只更新 `group_members`：角色请求只允许 0/1，不能借此写入群主角色 2；`muted_until=NULL` 表示解禁，未来 UTC 截止时间表示禁言，过期值在审计上可以保留但不会继续生效。任免管理员只允许真实 `groups.owner_id`，禁言时群主可管理管理员/成员，管理员只可管理普通成员。UPDATE 与群成员协调事件同事务提交，完整重建保证改 role 不丢 muted_until、解禁也不丢 role。
 
+GROUP-004 转让群主按 `groups -> 旧群主 member -> 新群主 member` 顺序加锁，在同一事务把旧群主降为 role=0、把新群主升为 role=2 并清空其 `muted_until`、更新 `groups.owner_id`，最后写 `group_members` 协调事件。退群同样先锁群和自己的成员行；真实 owner_id 返回 1306，管理员/普通成员则删除自己的成员行并写协调事件。提交后完整重建会同时修正成员 Set、角色/禁言 Hash 和用户反向群 Set；WS 只发送提交后的刷新提示，不参与权威事务。
+
 群成员 loaded marker 从旧布尔字符串升级为预期基数。`EnsureGroupAccess` 以 O(1) 的 `SCARD/HLEN` 同时校验 Set 与 Hash；老缓存中多成员群的 marker=`1` 会自动触发回源并被改写为真实数量。Lua 对“Set 中是成员但 Hash 元数据缺失”的竞态安全拒绝，避免缓存局部丢失绕过禁言。
 
 好友重建只替换 `friend:{owner}:*`，不会擅自删除另一用户拥有的方向；群成员重建会同时维护 Set、Hash、`user_groups` 和有界 owner index，不在 Lua 中运行全库 `KEYS`。

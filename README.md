@@ -10,12 +10,12 @@
 | Go 服务启动器 | 已装配 MySQL、Redis、RabbitMQ，默认监听 `18080` |
 | 健康检查 | `GET /health` 返回 200 |
 | 业务 HTTP 契约 | 原 42 个路由全部注册；GROUP-003 新增 2 个禁言路由，当前共 44 个 |
-| WebSocket 入口 | 已实现 JWT 握手、单用户连接替换、心跳租约及单实例好友/在线事件；跨实例 fanout 与聊天帧分派待后续任务 |
+| WebSocket 入口 | 已实现 JWT 握手、单用户连接替换、心跳租约及单实例好友/在线/群变更事件；跨实例 fanout 与聊天帧分派待后续任务 |
 | 账户与鉴权 | 注册、登录、刷新轮换、修改用户名/密码已实现 |
 | 头像 | 安全上传、资料更新、公开读取与静态文件访问已实现 |
 | 好友 | 申请/分页、接受/拒绝、好友列表/删除、拉黑/解除及实时刷新已实现 |
 | 缓存真相 | MySQL 真相、启动预热、按需回源、事务协调事件、后台修复及 `cachectl` 巡检已实现 |
-| 群管理 | 建群/资料、成员增删分页、管理员任免与禁言已实现；转让群主、退群和解散仍保留 TODO |
+| 群管理 | 建群/资料、成员增删分页、管理员任免/禁言、转让群主和退群已实现；解散群仍保留 TODO |
 | 其余业务逻辑 | 聊天消息、朋友圈和设置仍保留 `TODO[任务编号]` 占位 |
 | 受保护接口 | 全部经过真实 JWT 中间件；无效或缺失 Token 返回 401 |
 | MySQL | 版本化迁移、连接池、事务 Repository；13 张上游表 + 用户消息状态表 + 缓存协调事件表 |
@@ -102,7 +102,7 @@ npm.cmd ci
 npm.cmd run dev
 ```
 
-访问 `http://localhost:5173`。业务后端尚未实现时，可在开发环境登录页使用“暂不连接后端，进入界面预览”。
+访问 `http://localhost:5173`。尚未实现的消息、动态等业务可继续在开发环境登录页使用“暂不连接后端，进入界面预览”。
 
 ### 4. 使用一体化容器（与第 2、3 步二选一）
 
@@ -137,7 +137,7 @@ go run ./cmd/cachectl -c configs/config.local.yaml -action audit -scope all
 
 `scope` 还可选 `friends`、`blacklists`、`groups`。`audit` 发现不一致时会以退出码 2 结束，适合接入运维脚本；它不会把 Redis 反向写回 MySQL。显式 `rebuild` 是严格修复路径，会在每个资源锁内执行增量 SCAN 以清理 owner index 外的人工孤儿，因此应作为运维命令使用；应用启动预热和在线修复仍走有界索引。
 
-当前 Compose 只有一个 `app` 实例，好友 WebSocket 事件也按单实例实现。以后横向扩容时，需先在 WS-001/OPS 中加入 Redis Pub/Sub 或 RabbitMQ 跨实例 fanout；好友申请和好友关系本身已经持久化在 MySQL，不依赖事件帧保存。
+当前 Compose 只有一个 `app` 实例，好友与群变更 WebSocket 事件也按单实例实现。以后横向扩容时，需先在 WS-001/OPS 中加入 Redis Pub/Sub 或 RabbitMQ 跨实例 fanout；好友关系与群状态本身已经持久化在 MySQL，不依赖事件帧保存。
 
 ## 开发入口
 
@@ -148,6 +148,7 @@ go run ./cmd/cachectl -c configs/config.local.yaml -action audit -scope all
 - [群资料小白教程](docs/GROUP_TUTORIAL.md)：从建群事务、成员关系到资料查询与更新。
 - [群成员管理小白教程](docs/GROUP_MEMBER_TUTORIAL.md)：好友邀请、移除权限、并发容量、分页与 Redis 正反向一致性。
 - [群角色与禁言小白教程](docs/GROUP_ROLE_MUTE_TUTORIAL.md)：管理员任免、禁言权限、完整缓存投影与群消息 Lua 校验。
+- [群主转让与退群小白教程](docs/GROUP_TRANSFER_LEAVE_TUTORIAL.md)：三处状态事务、群主退出约束、Redis 修复与 WS 刷新提示。
 - [架构说明](docs/ARCHITECTURE.md)：模块边界、目标数据流和源码/文档漂移。
 - [数据库与中间件契约](docs/DATABASE.md)：13 张表、Redis 键、MQ 队列和一致性风险。
 - [前端复制与联调说明](docs/FRONTEND_COPY.md)：复制范围、环境变量和后端耦合点。

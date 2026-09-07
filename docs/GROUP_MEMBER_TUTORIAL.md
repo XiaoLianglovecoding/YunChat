@@ -16,7 +16,7 @@
 | 移除成员 | `DELETE /api/v1/group/:groupID/member/:memberID` | 路径中的成员用户 ID | HTTP 200，省略 `data` |
 | 成员列表 | `GET /api/v1/group/:groupID/members` | `limit=20&offset=0` | 分页成员资料 |
 
-角色修改与禁言后来已经在 `GROUP-003` 完成，详见 [GROUP_ROLE_MUTE_TUTORIAL.md](GROUP_ROLE_MUTE_TUTORIAL.md)；退群和转让群主仍属于 `GROUP-004`。本篇继续只讲 GROUP-002 的边界。
+角色修改与禁言后来已经在 `GROUP-003` 完成，详见 [GROUP_ROLE_MUTE_TUTORIAL.md](GROUP_ROLE_MUTE_TUTORIAL.md)；退群和转让群主也已经在 `GROUP-004` 完成，详见 [GROUP_TRANSFER_LEAVE_TUTORIAL.md](GROUP_TRANSFER_LEAVE_TUTORIAL.md)。本篇继续只讲 GROUP-002 的边界。
 
 ## 1. 先把数据关系想清楚
 
@@ -80,9 +80,9 @@ LIMIT ? OFFSET ?;
 | 管理员 | 禁止 `1305` | 禁止 `1309` | 可以 |
 | 普通成员/非成员 | 禁止 `1301` | 禁止 `1301` | 禁止 `1301` |
 
-群主不能通过“移除自己”来退群，因为那会留下没有群主的群。正确流程是先转让群主，再退群，这属于 `GROUP-004`。
+群主不能通过“移除自己”来退群，因为那会留下没有群主的群。现在应调用 `GROUP-004` 的转让接口，再调用退群接口。
 
-管理员也不能用移除接口移除自己。管理员自愿退群同样应走后续的退群业务。
+管理员也不能用移除接口移除自己。管理员或普通成员自愿退出应调用 `POST /group/:groupID/leave`。
 
 ### 2.3 查看权限
 
@@ -312,7 +312,7 @@ Handler 不直接 COUNT、不查好友，也不写 Redis。
 
 [group_repository.go](../backend/internal/repository/group_repository.go) 负责事务绑定、`FOR UPDATE`、COUNT、JOIN 分页和成员 DELETE。Service 只依赖窄接口，因此单元测试能用内存 fake，不需要每次都启动 MySQL。
 
-已完成的资料、成员与 GROUP-003 角色/禁言能力组合成 `GroupCoreService`；尚未完成的转让与退群仍留在更大的 `GroupService` 契约中。这是接口隔离：Router 只要求当前真实可用的能力。
+已完成的资料、成员、GROUP-003 角色/禁言和 GROUP-004 转让/退群能力组合成 `GroupCoreService`。这是接口隔离：各组业务仍有自己的小接口，Router 再依赖当前真实可用能力的组合。
 
 ## 10. 业务错误码速查
 

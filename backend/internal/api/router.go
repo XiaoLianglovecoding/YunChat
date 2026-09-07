@@ -197,6 +197,8 @@ func NewRouter(opts RouterOptions) *gin.Engine {
 		handlers[routeKey(http.MethodPut, "/group/:groupID/member/:memberID/role")] = groupHandler.UpdateMemberRole
 		handlers[routeKey(http.MethodPut, "/group/:groupID/member/:memberID/mute")] = groupHandler.MuteMember
 		handlers[routeKey(http.MethodDelete, "/group/:groupID/member/:memberID/mute")] = groupHandler.UnmuteMember
+		handlers[routeKey(http.MethodPut, "/group/:groupID/owner")] = groupHandler.TransferOwnership
+		handlers[routeKey(http.MethodPost, "/group/:groupID/leave")] = groupHandler.Leave
 	}
 
 	v1 := r.Group("/api/v1")

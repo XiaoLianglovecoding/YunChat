@@ -63,7 +63,7 @@ group_members
 
 任免管理员只属于群主。管理员不能继续任命新的管理员，也不能取消同级，否则管理员数量和权限会失去群主控制。
 
-请求中的角色只允许 `0` 和 `1`。客户端不能通过传入 `2` 把任何人变成群主；转让群主必须同时维护 `groups.owner_id` 和两条成员角色，属于独立的 `GROUP-004` 事务。
+请求中的角色只允许 `0` 和 `1`。客户端不能通过传入 `2` 把任何人变成群主；转让群主必须同时维护 `groups.owner_id` 和两条成员角色，现已由独立的 `GROUP-004` 事务实现，详见 [GROUP_TRANSFER_LEAVE_TUTORIAL.md](GROUP_TRANSFER_LEAVE_TUTORIAL.md)。
 
 ### 3.2 禁言与解禁
 
@@ -117,7 +117,7 @@ COMMIT
   7. 尽力立即按 MySQL 完整重建 Redis 成员投影
 ```
 
-为什么还要锁群行？GROUP-002 的添加、移除，以及未来 GROUP-004 的转让/退群都会先锁同一条群记录。所有群成员写操作采用相同锁顺序：
+为什么还要锁群行？GROUP-002 的添加、移除和 GROUP-004 的转让、退群都会先锁同一条群记录。所有群成员写操作采用相同锁顺序：
 
 ```text
 groups → operator member → target member
@@ -377,7 +377,7 @@ GET group_member_loaded:100
 ## 15. 测试在证明什么
 
 - Service 单元测试：真实群主判断、任免限制、禁言权限矩阵、非法角色/时间、幂等和事务回滚。
-- Handler/Router 测试：JWT 操作者透传、缺失字段、RFC3339、三条真实路由，以及 GROUP-004 仍返回 501。
+- Handler/Router 测试：JWT 操作者透传、缺失字段、RFC3339 和三条 GROUP-003 真实路由；GROUP-004 后续也已经接入真实 Handler。
 - MySQL + Redis 集成测试：角色与禁言跨字段不丢失、协调事件、完整 Hash 投影。
 - Lua 集成测试：禁言返回 5002；到期或解禁后允许；拒绝时不分配 dedup key 和 group_seq。
 - 前端测试：权限按钮、三个时长、禁言展示、解禁、中文错误与防重复提交。

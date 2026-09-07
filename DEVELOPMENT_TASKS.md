@@ -114,8 +114,9 @@ rg -n 'TODO\[[A-Z0-9,-]+\]' backend
   依赖：GROUP-002。验收：不能越权修改同级/群主；增加成员禁言/解禁 HTTP 或 WS 命令；`group_member_info:{gid}` 被完整维护；群 Lua 正确拒绝禁言用户。
   已冻结规则：任免管理员只认 `groups.owner_id`，且角色接口只接受普通成员/管理员 `0/1`；群主可禁言管理员和普通成员，管理员只能禁言普通成员。角色/禁言变更与 `group_members` 协调事件同事务提交，Redis 从 MySQL 完整重建角色和截止时间；群消息 Lua 用 Redis `TIME` 判断是否到期，并在元信息缺失时安全拒绝。
 
-- [ ] **GROUP-004 (P0)**：转让群主和退群。  
+- [x] **GROUP-004 (P0)**：转让群主和退群。
   依赖：GROUP-002。验收：转让三处状态在同一事务；群主不能直接退出；缓存和 WS 群变更通知一致。
+  已冻结规则：转让权限只认 `groups.owner_id`，目标必须是另一位现有成员；按群行、旧群主成员行、新群主成员行顺序加锁，在同一事务把旧群主降为普通成员、新群主升为群主并解除禁言、更新 `owner_id`、写 `group_members` 协调事件。真实群主退群返回 1306，管理员和普通成员只能删除自己的成员行；提交后按 MySQL 完整重建 Redis。转让向当前成员发送 `groupUpdated(owner_transferred)`，退群向退出者发送 `groupRemoved(left)`、向剩余成员发送 `groupUpdated(member_left)`；WS 是单实例尽力通知，漏帧由 HTTP 群列表/详情/成员查询恢复。详见 `docs/GROUP_TRANSFER_LEAVE_TUTORIAL.md`。
 
 - [ ] **GROUP-005 (P2)**：解散群、成员上限与异常恢复。  
   依赖：GROUP-004。验收：清理逻辑可重试；历史消息保留策略明确；大群扇出有压测数据。

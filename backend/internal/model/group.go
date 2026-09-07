@@ -8,6 +8,12 @@ const (
 	GroupRoleOwner
 )
 
+const (
+	GroupRemovedReasonLeft             = "left"
+	GroupUpdatedReasonOwnerTransferred = "owner_transferred"
+	GroupUpdatedReasonMemberLeft       = "member_left"
+)
+
 type Group struct {
 	ID         int64     `json:"id"`
 	Name       string    `json:"name"`
@@ -27,13 +33,22 @@ type GroupMember struct {
 	JoinedAt   time.Time  `json:"joined_at"`
 }
 
-// GroupAddedNotification / GroupRemovedNotification 与前端实时群变更契约一致。
+// GroupAddedNotification / GroupRemovedNotification / GroupUpdatedNotification
+// 与前端实时群变更契约一致。
 type GroupAddedNotification struct {
 	GroupID int64  `json:"groupId"`
 	Name    string `json:"name"`
 }
 
 type GroupRemovedNotification struct {
+	GroupID int64  `json:"groupId"`
+	Reason  string `json:"reason"`
+}
+
+// GroupUpdatedNotification is a lightweight refresh hint. It intentionally
+// carries no role snapshot: clients reread the authoritative group/member
+// endpoints, avoiding stale authorization data in a best-effort WS frame.
+type GroupUpdatedNotification struct {
 	GroupID int64  `json:"groupId"`
 	Reason  string `json:"reason"`
 }

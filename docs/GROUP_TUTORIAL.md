@@ -11,7 +11,7 @@
 | 群详情 | `GET /api/v1/group/:groupID` | `Group` |
 | 更新资料 | `PUT /api/v1/group/:groupID` | 省略 `data` |
 
-四个接口都需要登录后的 access token。成员邀请、移除和分页列表已经在 `GROUP-002` 完成，详见 [GROUP_MEMBER_TUTORIAL.md](GROUP_MEMBER_TUTORIAL.md)；管理员角色与禁言已经在 `GROUP-003` 完成，详见 [GROUP_ROLE_MUTE_TUTORIAL.md](GROUP_ROLE_MUTE_TUTORIAL.md)。退群和转让群主仍属于 `GROUP-004`。
+四个接口都需要登录后的 access token。成员邀请、移除和分页列表已经在 `GROUP-002` 完成，详见 [GROUP_MEMBER_TUTORIAL.md](GROUP_MEMBER_TUTORIAL.md)；管理员角色与禁言已经在 `GROUP-003` 完成，详见 [GROUP_ROLE_MUTE_TUTORIAL.md](GROUP_ROLE_MUTE_TUTORIAL.md)；转让群主与退群已经在 `GROUP-004` 完成，详见 [GROUP_TRANSFER_LEAVE_TUTORIAL.md](GROUP_TRANSFER_LEAVE_TUTORIAL.md)。
 
 ## 1. 先建立一个正确的心智模型
 
@@ -228,11 +228,12 @@ HTTP 仍返回建群成功
 GroupProfileService       // GROUP-001 的四个资料用例
 GroupMemberService        // GROUP-002 的添加、移除、分页列表
 GroupMemberManagementService // GROUP-003 的管理员任免、禁言和解禁
-GroupCoreService          // 组合上面三个已完成接口，供 Router 使用
-GroupService              // 再嵌入 Core，只声明后续转让/退群
+GroupLifecycleService     // GROUP-004 的转让群主和退群
+GroupCoreService          // 组合上面四组已完成接口，供 Router 使用
+GroupService              // 完整群业务入口，后续可继续扩展 GROUP-005
 ```
 
-这叫接口隔离：调用者只依赖它真正使用的能力。资料、成员、角色和禁言路由都已经改为真实 Handler；尚未完成的退群和转让路由仍返回结构化 501，而不是用空实现假装完成。
+这叫接口隔离：调用者只依赖它真正使用的能力。资料、成员、角色、禁言、转让和退群路由都已经改为真实 Handler；后续解散群仍留给 `GROUP-005`。
 
 ## 9. 前端怎样接上这四个接口
 
@@ -242,7 +243,7 @@ GroupService              // 再嵌入 Core，只声明后续转让/退群
 2. 当前用户等于 `group.owner_id` 时始终被识别为真实群主；GROUP-002 又补上了完整成员分页，因此管理员权限也能从成员资料恢复。
 3. 改名成功会同步更新本地会话标题，不需要刷新页面。
 
-前端现在已经开放好友邀请、成员列表、成员移除、管理员任免和禁言；管理员任免与成员移除都会先二次确认。退群和转让群主仍等待 `GROUP-004` 后端任务完成。
+前端现在已经开放好友邀请、成员列表、成员移除、管理员任免、禁言、转让群主和退群；危险操作会先二次确认。转让成功会同步群主与成员角色，退群成功会清理群查询和本地会话。
 
 ## 10. 自己动手调用接口
 

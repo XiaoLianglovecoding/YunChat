@@ -28,12 +28,26 @@ type GroupRepository interface {
 	LockGroupUsers(context.Context, int64, int64) (int, error)
 	IsFriendPair(context.Context, int64, int64) (bool, error)
 	CountGroupMembers(context.Context, int64) (int64, error)
+	GetGroupMembers(context.Context, int64) ([]model.GroupMember, error)
 	RemoveGroupMember(context.Context, int64, int64) error
+	UpdateGroupOwner(context.Context, int64, int64) error
 	UpdateGroupMemberRole(context.Context, int64, int64, int) error
 	UpdateGroupMemberMute(context.Context, int64, int64, *time.Time) error
 	ListGroupMembersPage(context.Context, int64, int, int) ([]GroupMemberProfile, error)
 	ListGroupsByUser(context.Context, int64) ([]model.Group, error)
 	UpdateGroupProfile(context.Context, int64, string, string) error
+}
+
+// UpdateGroupOwner 只更新群主外键，避免复用会连带覆盖群名和公告的旧通用 UpdateGroup。
+// 调用方必须把它和新旧群主的成员角色更新放在同一个群事务中。
+func (m *MySQLRepoImpl) UpdateGroupOwner(ctx context.Context, groupID, ownerID int64) error {
+	if _, err := m.db.ExecContext(ctx,
+		"UPDATE `groups` SET owner_id = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?",
+		ownerID, groupID,
+	); err != nil {
+		return fmt.Errorf("update group owner: %w", err)
+	}
+	return nil
 }
 
 func (m *MySQLRepoImpl) UpdateGroupMemberMute(ctx context.Context, groupID, userID int64, mutedUntil *time.Time) error {

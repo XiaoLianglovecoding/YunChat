@@ -57,10 +57,12 @@ JWT 至少要带 `user_id`、`username`、`exp`。否则前端解析出的用户
 - `msgRevoked`
 - `friendApply` / `friendAccepted` / `presence`
 - `kick`
-- `groupAdded` / `groupRemoved`
+- `groupAdded` / `groupRemoved` / `groupUpdated`
 - `error`
 
 `friendApply`、`friendAccepted`、`presence` 已在 Go payload、TypeScript 联合类型和 `RealtimeBootstrap` 中同步。前端收到事件时只刷新 TanStack Query；首次连接和重连也会刷新好友/申请，以 MySQL-backed HTTP 数据补偿离线期间错过的 WS 帧。
+
+`GROUP-004` 又同步了 `groupUpdated`，用于群主变化或成员退出后的群资料/成员 Query 失效；退出者的 `groupRemoved(reason=left)` 会移除群会话和相关 Query。首次连接和重连的权威 `/group/list` 刷新也会剔除已经不属于当前用户的陈旧群会话。
 
 私聊会话 ID 固定为 `p_{较小用户ID}_{较大用户ID}`，群聊固定为 `g_{groupID}`。
 

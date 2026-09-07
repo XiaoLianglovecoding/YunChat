@@ -87,18 +87,22 @@ type GroupMemberManagementService interface {
 	MuteMember(context.Context, int64, int64, int64, *time.Time) error
 }
 
-// GroupCoreService 汇总目前已经落地的 GROUP-001、GROUP-002 和 GROUP-003。
-// 转让群主和退群继续留在更完整的 GroupService 中。
+type GroupLifecycleService interface {
+	TransferOwnership(context.Context, int64, int64, int64) error
+	Leave(context.Context, int64, int64) error
+}
+
+// GroupCoreService 汇总目前已经落地的 GROUP-001～GROUP-004。
 type GroupCoreService interface {
 	GroupProfileService
 	GroupMemberService
 	GroupMemberManagementService
+	GroupLifecycleService
 }
 
+// GroupService 保留为群业务的完整入口；后续 GROUP-005 可以继续在这里扩展。
 type GroupService interface {
 	GroupCoreService
-	TransferOwnership(context.Context, int64, int64, int64) error // TODO[GROUP-004]
-	Leave(context.Context, int64, int64) error                    // TODO[GROUP-004]
 }
 
 type MessageService interface {

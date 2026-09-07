@@ -11,6 +11,7 @@ import (
 
 	"my-im/internal/apperror"
 	"my-im/internal/model"
+	"my-im/internal/protocol"
 	"my-im/internal/repository"
 )
 
@@ -25,12 +26,20 @@ const (
 type GroupServiceImpl struct {
 	repository repository.GroupRepository
 	cache      GroupCacheRefresher
+	notifier   GroupEventNotifier
 }
 
 // GroupCacheRefresher 是群成员事务提交后的 Redis 快速刷新端口。
 // MySQL 事务已经写入协调事件，因此这里失败不会把已提交的业务伪装成失败。
 type GroupCacheRefresher interface {
 	ReconcileGroupMembers(context.Context, int64) error
+}
+
+// GroupEventNotifier sends a best-effort online hint after durable state has
+// committed. Offline/cross-instance delivery is intentionally not promised by
+// this interface; clients always re-read the MySQL-backed HTTP truth.
+type GroupEventNotifier interface {
+	NotifyGroupEvent(context.Context, int64, string, any) error
 }
 
 type GroupServiceOption func(*GroupServiceImpl) error
@@ -41,6 +50,16 @@ func WithGroupCache(cache GroupCacheRefresher) GroupServiceOption {
 			return errors.New("group cache refresher must not be nil")
 		}
 		groupService.cache = cache
+		return nil
+	}
+}
+
+func WithGroupEventNotifier(notifier GroupEventNotifier) GroupServiceOption {
+	return func(groupService *GroupServiceImpl) error {
+		if notifier == nil {
+			return errors.New("group event notifier must not be nil")
+		}
+		groupService.notifier = notifier
 		return nil
 	}
 }
@@ -353,6 +372,162 @@ func sameOptionalGroupTime(first, second *time.Time) bool {
 		return first == nil && second == nil
 	}
 	return first.Equal(*second)
+}
+
+// TransferOwnership atomically moves the two representations of ownership:
+// groups.owner_id and the old/new group_members.role rows. The new owner is
+// also unmuted so ownership can never be transferred into an unusable state.
+func (s *GroupServiceImpl) TransferOwnership(ctx context.Context, groupID, operatorID, newOwnerID int64) error {
+	if groupID <= 0 || operatorID <= 0 || newOwnerID <= 0 {
+		return apperror.New(apperror.CodeInvalidParam)
+	}
+	if operatorID == newOwnerID {
+		return apperror.WithMessage(apperror.CodeInvalidParam, "new owner must differ from current owner")
+	}
+
+	err := s.repository.WithinGroupTransaction(ctx, func(txCtx context.Context, tx repository.GroupRepository) error {
+		// Every group-member mutation uses this order: group first, members next.
+		// The group lock serializes transfer against add/remove/role/mute/leave.
+		group, err := tx.GetGroupForUpdate(txCtx, groupID)
+		if err != nil {
+			return err
+		}
+		if group == nil {
+			return apperror.New(apperror.CodeGroupNotFound)
+		}
+
+		oldOwner, err := tx.GetGroupMemberForUpdate(txCtx, groupID, operatorID)
+		if err != nil {
+			return err
+		}
+		// A stray role=2 row never grants transfer authority. Conversely, a
+		// stale role on the real owner does not revoke authority from owner_id.
+		if oldOwner == nil || group.OwnerID != operatorID {
+			return apperror.New(apperror.CodeNotOwnerOrAdmin)
+		}
+
+		newOwner, err := tx.GetGroupMemberForUpdate(txCtx, groupID, newOwnerID)
+		if err != nil {
+			return err
+		}
+		if newOwner == nil {
+			return apperror.New(apperror.CodeGroupMemberNotFound)
+		}
+
+		if err := tx.UpdateGroupMemberRole(txCtx, groupID, operatorID, model.GroupRoleMember); err != nil {
+			return err
+		}
+		if err := tx.UpdateGroupMemberRole(txCtx, groupID, newOwnerID, model.GroupRoleOwner); err != nil {
+			return err
+		}
+		if newOwner.MutedUntil != nil {
+			if err := tx.UpdateGroupMemberMute(txCtx, groupID, newOwnerID, nil); err != nil {
+				return err
+			}
+		}
+		if err := tx.UpdateGroupOwner(txCtx, groupID, newOwnerID); err != nil {
+			return err
+		}
+		return tx.EnqueueCacheReconcile(txCtx, repository.CacheResourceGroupMembers, groupID)
+	})
+	if err != nil {
+		return groupServiceError(err)
+	}
+
+	// Redis and WebSocket are projections/hints. Their failures never turn a
+	// committed ownership transfer into an HTTP failure; the durable reconcile
+	// event and later HTTP reads recover from either failure.
+	postCommitCtx := context.WithoutCancel(ctx)
+	s.refreshGroupMemberCache(postCommitCtx, groupID)
+	s.notifyCurrentGroupMembers(postCommitCtx, groupID, protocol.TypeGroupUpdated, model.GroupUpdatedNotification{
+		GroupID: groupID,
+		Reason:  model.GroupUpdatedReasonOwnerTransferred,
+	}, operatorID, newOwnerID)
+	return nil
+}
+
+// Leave removes the authenticated user's own membership. A real owner must
+// transfer ownership first; role=2 on any other row does not block self-leave.
+func (s *GroupServiceImpl) Leave(ctx context.Context, groupID, userID int64) error {
+	if groupID <= 0 || userID <= 0 {
+		return apperror.New(apperror.CodeInvalidParam)
+	}
+
+	err := s.repository.WithinGroupTransaction(ctx, func(txCtx context.Context, tx repository.GroupRepository) error {
+		group, err := tx.GetGroupForUpdate(txCtx, groupID)
+		if err != nil {
+			return err
+		}
+		if group == nil {
+			return apperror.New(apperror.CodeGroupNotFound)
+		}
+		member, err := tx.GetGroupMemberForUpdate(txCtx, groupID, userID)
+		if err != nil {
+			return err
+		}
+		if member == nil {
+			return apperror.New(apperror.CodeGroupNotMember)
+		}
+		if group.OwnerID == userID {
+			return apperror.New(apperror.CodeCannotLeaveAsOwner)
+		}
+		if err := tx.RemoveGroupMember(txCtx, groupID, userID); err != nil {
+			return err
+		}
+		return tx.EnqueueCacheReconcile(txCtx, repository.CacheResourceGroupMembers, groupID)
+	})
+	if err != nil {
+		return groupServiceError(err)
+	}
+
+	postCommitCtx := context.WithoutCancel(ctx)
+	s.refreshGroupMemberCache(postCommitCtx, groupID)
+	s.notifyGroupUser(postCommitCtx, userID, protocol.TypeGroupRemoved, model.GroupRemovedNotification{
+		GroupID: groupID,
+		Reason:  model.GroupRemovedReasonLeft,
+	})
+	s.notifyCurrentGroupMembers(postCommitCtx, groupID, protocol.TypeGroupUpdated, model.GroupUpdatedNotification{
+		GroupID: groupID,
+		Reason:  model.GroupUpdatedReasonMemberLeft,
+	})
+	return nil
+}
+
+func (s *GroupServiceImpl) notifyCurrentGroupMembers(
+	ctx context.Context,
+	groupID int64,
+	eventType string,
+	payload any,
+	fallbackUserIDs ...int64,
+) {
+	if s.notifier == nil {
+		return
+	}
+	members, err := s.repository.GetGroupMembers(ctx, groupID)
+	userIDs := fallbackUserIDs
+	if err == nil {
+		userIDs = make([]int64, 0, len(members))
+		for _, member := range members {
+			userIDs = append(userIDs, member.UserID)
+		}
+	}
+	seen := make(map[int64]struct{}, len(userIDs))
+	for _, userID := range userIDs {
+		if userID <= 0 {
+			continue
+		}
+		if _, exists := seen[userID]; exists {
+			continue
+		}
+		seen[userID] = struct{}{}
+		s.notifyGroupUser(ctx, userID, eventType, payload)
+	}
+}
+
+func (s *GroupServiceImpl) notifyGroupUser(ctx context.Context, userID int64, eventType string, payload any) {
+	if s.notifier != nil {
+		_ = s.notifier.NotifyGroupEvent(ctx, userID, eventType, payload)
+	}
 }
 
 func (s *GroupServiceImpl) ListMembers(ctx context.Context, groupID, viewerID int64, limit, offset int) (Page[GroupMemberListItem], error) {

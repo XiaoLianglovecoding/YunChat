@@ -11,6 +11,7 @@ import { queryClient } from "../../lib/queryClient";
 import { configureNotifications, notifyIncomingMessage } from "../../realtime/notifications";
 
 let loadedSettings: Awaited<ReturnType<typeof settingsApi.get>> | null = null;
+let groupRefreshGeneration = 0;
 
 function applyMutedConversations() {
   if (!loadedSettings) return;
@@ -63,6 +64,16 @@ function updateFriendPresence(userId: number, online: boolean, client: QueryClie
   const chat = useChatStore.getState();
   const conversation = chat.conversations.find((item) => !item.group && item.targetId === userId);
   if (conversation) chat.setConversationIdentity(conversation.id, conversation.name, conversation.avatarUrl, online);
+}
+
+export function invalidateGroupQueries(groupId: number, client: QueryClient = queryClient) {
+  void client.invalidateQueries({ queryKey: ["group", groupId] });
+  void client.invalidateQueries({ queryKey: ["group-members", groupId] });
+}
+
+function removeGroupQueries(groupId: number, client: QueryClient = queryClient) {
+  client.removeQueries({ queryKey: ["group", groupId], exact: true });
+  client.removeQueries({ queryKey: ["group-members", groupId], exact: true });
 }
 
 export function handleServerMessage(message: ServerWsMessage, currentUserId: number, clearSession: () => void) {
@@ -133,20 +144,36 @@ export function handleServerMessage(message: ServerWsMessage, currentUserId: num
       break;
     case "groupRemoved":
       chat.removeConversation(`g_${message.data.groupId}`);
+      removeGroupQueries(message.data.groupId);
+      // Supersede a group-list request that may have started before this
+      // removal frame; otherwise its stale response could recreate the chat.
+      if (currentUserId > 0) void refreshGroupConversations(currentUserId);
       break;
     case "groupAdded":
       chat.addGroupConversation(message.data.groupId, message.data.name);
+      invalidateGroupQueries(message.data.groupId);
+      break;
+    case "groupUpdated":
+      invalidateGroupQueries(message.data.groupId);
       break;
   }
 }
 
 export async function refreshGroupConversations(expectedUserId: number) {
+  const generation = ++groupRefreshGeneration;
   try {
     const groups = await groupsApi.list();
     const chat = useChatStore.getState();
-    // Ignore a response for a session that logged out or switched users while
-    // this request was in flight.
-    if (chat.mode !== "live" || chat.liveUserId !== expectedUserId) return;
+    // Ignore a response for a session that logged out/switched users, and also
+    // ignore an older same-user request that finished after a newer refresh.
+    if (generation !== groupRefreshGeneration || chat.mode !== "live" || chat.liveUserId !== expectedUserId) return;
+    const currentGroupIDs = new Set(groups.map((group) => group.id));
+    for (const conversation of chat.conversations) {
+      if (conversation.group && !currentGroupIDs.has(conversation.targetId)) {
+        chat.removeConversation(conversation.id);
+        removeGroupQueries(conversation.targetId);
+      }
+    }
     for (const group of groups) chat.addGroupConversation(group.id, group.name);
   } catch {
     // 群列表刷新失败不影响 WebSocket 连接和已有会话。
@@ -154,13 +181,15 @@ export async function refreshGroupConversations(expectedUserId: number) {
 }
 
 export function handleConnectionState(state: ConnectionState) {
-  useChatStore.getState().setConnectionState(state);
+  const chat = useChatStore.getState();
+  chat.setConnectionState(state);
   if (state !== "connected") return;
 
-  // A reconnect may happen after one or more durable friend events were missed.
+  // A reconnect may happen after durable friend/group events were missed.
   // HTTP revalidation restores the authoritative MySQL state in that case.
   invalidateFriendQueries();
-  const { lastSyncTime, lastSyncMsgId } = useChatStore.getState();
+  if (chat.liveUserId) void refreshGroupConversations(chat.liveUserId);
+  const { lastSyncTime, lastSyncMsgId } = chat;
   goimSocket.send({ type: "syncReq", data: { lastSyncTime, lastSyncMsgId, batchSize: 50 } });
 }
 

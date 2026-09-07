@@ -220,6 +220,15 @@ func (h *Hub) NotifyFriendEvent(ctx context.Context, userID int64, msgType strin
 	return h.Notify(ctx, userID, msgType, payload)
 }
 
+// NotifyGroupEvent implements service.GroupEventNotifier without importing the
+// service package. Like every Hub notification, it only reaches a connection
+// owned by this process. MySQL and the cache-reconciliation event remain the
+// durable truth; a future cross-instance event bus may fan out the same public
+// groupAdded/groupUpdated/groupRemoved contract to hubs in other processes.
+func (h *Hub) NotifyGroupEvent(ctx context.Context, userID int64, msgType string, payload any) error {
+	return h.Notify(ctx, userID, msgType, payload)
+}
+
 func (h *Hub) install(next *client) *client {
 	h.mu.Lock()
 	defer h.mu.Unlock()

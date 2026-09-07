@@ -217,6 +217,43 @@ func (h *GroupHandler) UnmuteMember(c *gin.Context) {
 	WriteSuccess(c, http.StatusOK, nil)
 }
 
+func (h *GroupHandler) TransferOwnership(c *gin.Context) {
+	userID, ok := currentUserID(c)
+	if !ok {
+		return
+	}
+	groupID, ok := groupIDParam(c)
+	if !ok {
+		return
+	}
+	var request TransferGroupOwnerRequest
+	if err := c.ShouldBindJSON(&request); err != nil || request.NewOwnerID <= 0 {
+		WriteError(c, apperror.New(apperror.CodeInvalidParam))
+		return
+	}
+	if err := h.groups.TransferOwnership(c.Request.Context(), groupID, userID, request.NewOwnerID); err != nil {
+		WriteError(c, err)
+		return
+	}
+	WriteSuccess(c, http.StatusOK, nil)
+}
+
+func (h *GroupHandler) Leave(c *gin.Context) {
+	userID, ok := currentUserID(c)
+	if !ok {
+		return
+	}
+	groupID, ok := groupIDParam(c)
+	if !ok {
+		return
+	}
+	if err := h.groups.Leave(c.Request.Context(), groupID, userID); err != nil {
+		WriteError(c, err)
+		return
+	}
+	WriteSuccess(c, http.StatusOK, nil)
+}
+
 func groupIDParam(c *gin.Context) (int64, bool) {
 	return positivePathID(c, "groupID")
 }

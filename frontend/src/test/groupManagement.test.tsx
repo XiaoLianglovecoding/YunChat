@@ -1,9 +1,10 @@
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { act, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
+import { useState } from "react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { Friendship, Group, Page, GroupMember } from "../../goim-api-types";
 import { ApiError } from "../api/client";
-import { canMuteGroupMember, canRemoveGroupMember, canUpdateGroupMemberRole, describeGroupMemberMute, GroupManagementDrawer, isGroupMemberMuted } from "../features/groups/GroupManagement";
+import { canLeaveGroup, canMuteGroupMember, canRemoveGroupMember, canTransferGroupOwnership, canUpdateGroupMemberRole, describeGroupMemberMute, GroupManagementDrawer, isGroupMemberMuted } from "../features/groups/GroupManagement";
 import { friendsApi, groupsApi } from "../lib/api";
 import { useAuthStore } from "../stores/authStore";
 import { useChatStore } from "../stores/chatStore";
@@ -50,12 +51,18 @@ function page(items: GroupMember[], total = items.length, offset = 0, hasMore = 
   return { items, pagination: { total, offset, limit: 100, has_more: hasMore } };
 }
 
-function renderManagement() {
+function ManagementHarness({ conversation, onClose }: { conversation: ReturnType<typeof useChatStore.getState>["conversations"][number]; onClose: () => void }) {
+  const [open, setOpen] = useState(true);
+  if (!open) return null;
+  return <GroupManagementDrawer conversation={conversation} onClose={() => { setOpen(false); onClose(); }} open />;
+}
+
+function renderManagement(onClose = () => undefined) {
   const client = new QueryClient({ defaultOptions: { queries: { retry: false }, mutations: { retry: false } } });
   const conversation = useChatStore.getState().conversations[0];
   render(
     <QueryClientProvider client={client}>
-      <GroupManagementDrawer conversation={conversation} onClose={() => undefined} open />
+      <ManagementHarness conversation={conversation} onClose={onClose} />
     </QueryClientProvider>,
   );
   return client;
@@ -147,6 +154,26 @@ describe("group profile management", () => {
     expect(canMuteGroupMember(group, admin, 2, peerAdmin)).toBe(false);
     expect(canMuteGroupMember(group, admin, 2, owner)).toBe(false);
     expect(canMuteGroupMember(group, ordinary, 4, ordinary)).toBe(false);
+  });
+
+  it("uses groups.owner_id for the transfer and leave permission matrix", () => {
+    const owner = member(1, 2);
+    const admin = member(2, 1);
+    const ordinary = member(3, 0);
+    const staleOwnerRole = member(4, 2);
+
+    expect(canTransferGroupOwnership(group, 1, admin)).toBe(true);
+    expect(canTransferGroupOwnership(group, 1, ordinary)).toBe(true);
+    expect(canTransferGroupOwnership(group, 1, staleOwnerRole)).toBe(true);
+    expect(canTransferGroupOwnership(group, 1, owner)).toBe(false);
+    expect(canTransferGroupOwnership(group, 2, ordinary)).toBe(false);
+    expect(canTransferGroupOwnership(group, 1, { ...ordinary, group_id: 999 })).toBe(false);
+
+    expect(canLeaveGroup(group, owner, 1)).toBe(false);
+    expect(canLeaveGroup(group, admin, 2)).toBe(true);
+    expect(canLeaveGroup(group, ordinary, 3)).toBe(true);
+    expect(canLeaveGroup(group, staleOwnerRole, 4)).toBe(true);
+    expect(canLeaveGroup(group, undefined, 2)).toBe(false);
   });
 
   it("recognizes active and expired mute deadlines", () => {
@@ -281,6 +308,107 @@ describe("group profile management", () => {
     fireEvent.click(within(dialog).getByRole("button", { name: "设为管理员" }));
 
     await waitFor(() => expect(updateRole).toHaveBeenCalledWith(22, 3, { role: 1 }));
+  });
+
+  it("lets the real owner confirm a transfer and synchronizes group and member query state", async () => {
+    const beforeMembers = page([member(1, 2, "旧群主"), { ...member(3, 1, "新群主候选人"), muted_until: "2099-01-01T00:00:00Z" }], 2);
+    const afterGroup = { ...group, owner_id: 3 };
+    const afterMembers = page([member(1, 0, "旧群主"), member(3, 2, "新群主候选人")], 2);
+    vi.spyOn(groupsApi, "get").mockResolvedValueOnce(group).mockResolvedValue(afterGroup);
+    vi.spyOn(groupsApi, "members").mockResolvedValueOnce(beforeMembers).mockResolvedValue(afterMembers);
+    vi.spyOn(friendsApi, "list").mockResolvedValue({
+      items: [],
+      pagination: { total: 0, offset: 0, limit: 100, has_more: false },
+    });
+    const transfer = vi.spyOn(groupsApi, "transferOwner").mockResolvedValue(undefined);
+    const client = renderManagement();
+    const invalidate = vi.spyOn(client, "invalidateQueries");
+
+    fireEvent.click(await screen.findByRole("button", { name: "转让群主" }));
+    const dialog = await screen.findByRole("alertdialog");
+    expect(within(dialog).getByText(/新群主候选人 将成为新群主/)).toBeInTheDocument();
+    fireEvent.click(within(dialog).getByRole("button", { name: "转让群主" }));
+
+    await waitFor(() => expect(transfer).toHaveBeenCalledWith(22, { new_owner_id: 3 }));
+    await waitFor(() => expect(client.getQueryData<Group>(["group", 22])?.owner_id).toBe(3));
+    await waitFor(() => expect(client.getQueryData<{ items: GroupMember[] }>(["group-members", 22])?.items).toEqual(expect.arrayContaining([
+      expect.objectContaining({ user_id: 1, role: 0 }),
+      expect.objectContaining({ user_id: 3, role: 2 }),
+    ])));
+    expect(client.getQueryData<{ items: GroupMember[] }>(["group-members", 22])?.items.find((item) => item.user_id === 3)?.muted_until).toBeUndefined();
+    expect(invalidate).toHaveBeenCalledWith({ queryKey: ["group", 22] });
+    expect(invalidate).toHaveBeenCalledWith({ queryKey: ["group-members", 22] });
+    await waitFor(() => expect(screen.queryByRole("alertdialog")).not.toBeInTheDocument());
+    expect(screen.queryByRole("button", { name: "转让群主" })).not.toBeInTheDocument();
+    expect(await screen.findByRole("button", { name: "退出群聊" })).toBeInTheDocument();
+    expect(useChatStore.getState().conversations).toHaveLength(1);
+  });
+
+  it("lets a non-owner leave and clears its conversation, messages, and group queries", async () => {
+    useAuthStore.setState({ user: { id: 2, username: "member" } });
+    vi.spyOn(groupsApi, "get").mockResolvedValue(group);
+    vi.spyOn(groupsApi, "members").mockResolvedValue(page([member(1, 2, "群主"), member(2, 0, "准备退群")], 2));
+    const leave = vi.spyOn(groupsApi, "leave").mockResolvedValue(undefined);
+    vi.spyOn(groupsApi, "list").mockResolvedValue([]);
+    const onClose = vi.fn();
+    const client = renderManagement(onClose);
+
+    const leaveButton = await screen.findByRole("button", { name: "退出群聊" });
+    fireEvent.click(leaveButton);
+    const dialog = await screen.findByRole("alertdialog");
+    expect(within(dialog).getByText(/本地会话和消息会被移除/)).toBeInTheDocument();
+    fireEvent.click(within(dialog).getByRole("button", { name: "退出群聊" }));
+
+    await waitFor(() => expect(leave).toHaveBeenCalledWith(22));
+    await waitFor(() => expect(useChatStore.getState().conversations).toHaveLength(0));
+    expect(useChatStore.getState().messagesByConversation.g_22).toBeUndefined();
+    await waitFor(() => expect(client.getQueryData(["group", 22])).toBeUndefined());
+    expect(client.getQueryData(["group-members", 22])).toBeUndefined();
+    expect(onClose).toHaveBeenCalledOnce();
+  });
+
+  it("treats an already-absent membership as a successful leave retry", async () => {
+    useAuthStore.setState({ user: { id: 2, username: "member" } });
+    vi.spyOn(groupsApi, "get").mockResolvedValue(group);
+    vi.spyOn(groupsApi, "members").mockResolvedValue(page([member(1, 2, "群主"), member(2, 0, "已经退出")], 2));
+    vi.spyOn(groupsApi, "leave").mockRejectedValue(new ApiError("not a group member", 5001, 403));
+    vi.spyOn(groupsApi, "list").mockResolvedValue([]);
+    const onClose = vi.fn();
+    const client = renderManagement(onClose);
+
+    fireEvent.click(await screen.findByRole("button", { name: "退出群聊" }));
+    fireEvent.click(within(await screen.findByRole("alertdialog")).getByRole("button", { name: "退出群聊" }));
+
+    await waitFor(() => expect(useChatStore.getState().conversations).toHaveLength(0));
+    expect(client.getQueryData(["group", 22])).toBeUndefined();
+    expect(client.getQueryData(["group-members", 22])).toBeUndefined();
+    expect(onClose).toHaveBeenCalledOnce();
+    expect(screen.queryByText("你已经不在这个群聊中")).not.toBeInTheDocument();
+  });
+
+  it("does not expose a leave action to the real owner", async () => {
+    vi.spyOn(groupsApi, "get").mockResolvedValue(group);
+    vi.spyOn(groupsApi, "members").mockResolvedValue(page([member(1, 2, "群主")], 1));
+    vi.spyOn(friendsApi, "list").mockResolvedValue({ items: [], pagination: { total: 0, offset: 0, limit: 100, has_more: false } });
+
+    renderManagement();
+
+    expect(await screen.findByText("群主需先转让身份才能退出群聊。")).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "退出群聊" })).not.toBeInTheDocument();
+  });
+
+  it("maps a stale-owner leave rejection without deleting the conversation", async () => {
+    useAuthStore.setState({ user: { id: 2, username: "member" } });
+    vi.spyOn(groupsApi, "get").mockResolvedValue(group);
+    vi.spyOn(groupsApi, "members").mockResolvedValue(page([member(1, 2, "服务端新群主"), member(2, 0, "缓存里的普通成员")], 2));
+    vi.spyOn(groupsApi, "leave").mockRejectedValue(new ApiError("owner must transfer ownership first", 1306, 409));
+
+    renderManagement();
+    fireEvent.click(await screen.findByRole("button", { name: "退出群聊" }));
+    fireEvent.click(within(await screen.findByRole("alertdialog")).getByRole("button", { name: "退出群聊" }));
+
+    expect(await screen.findByText("群主不能直接退出，请先转让群主身份")).toBeInTheDocument();
+    expect(useChatStore.getState().conversations).toHaveLength(1);
   });
 
   it("automatically changes an active mute to expired while the drawer stays open", async () => {
