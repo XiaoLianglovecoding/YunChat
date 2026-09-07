@@ -18,10 +18,13 @@ import (
 )
 
 type groupServiceStub struct {
-	create     func(context.Context, int64, string, string) (int64, error)
-	listByUser func(context.Context, int64) ([]model.Group, error)
-	get        func(context.Context, int64, int64) (*model.Group, error)
-	update     func(context.Context, int64, int64, string, string) error
+	create       func(context.Context, int64, string, string) (int64, error)
+	listByUser   func(context.Context, int64) ([]model.Group, error)
+	get          func(context.Context, int64, int64) (*model.Group, error)
+	update       func(context.Context, int64, int64, string, string) error
+	addMember    func(context.Context, int64, int64, int64) error
+	removeMember func(context.Context, int64, int64, int64) error
+	listMembers  func(context.Context, int64, int64, int, int) (service.Page[service.GroupMemberListItem], error)
 }
 
 func (s groupServiceStub) Create(ctx context.Context, ownerID int64, name, notice string) (int64, error) {
@@ -38,6 +41,18 @@ func (s groupServiceStub) Get(ctx context.Context, userID, groupID int64) (*mode
 
 func (s groupServiceStub) Update(ctx context.Context, userID, groupID int64, name, notice string) error {
 	return s.update(ctx, userID, groupID, name, notice)
+}
+
+func (s groupServiceStub) AddMember(ctx context.Context, groupID, operatorID, memberID int64) error {
+	return s.addMember(ctx, groupID, operatorID, memberID)
+}
+
+func (s groupServiceStub) RemoveMember(ctx context.Context, groupID, operatorID, memberID int64) error {
+	return s.removeMember(ctx, groupID, operatorID, memberID)
+}
+
+func (s groupServiceStub) ListMembers(ctx context.Context, groupID, viewerID int64, limit, offset int) (service.Page[service.GroupMemberListItem], error) {
+	return s.listMembers(ctx, groupID, viewerID, limit, offset)
 }
 
 func TestGroupCreateReturnsCreatedGroupID(t *testing.T) {
@@ -157,6 +172,68 @@ func TestGroupUpdatePassesProfileAndReturnsSuccess(t *testing.T) {
 	}
 }
 
+func TestGroupMemberHandlersPassAuthenticatedActorAndReturnContracts(t *testing.T) {
+	t.Run("add member", func(t *testing.T) {
+		stub := completeGroupStub()
+		stub.addMember = func(_ context.Context, groupID, operatorID, memberID int64) error {
+			if groupID != 9 || operatorID != 7 || memberID != 8 {
+				t.Fatalf("unexpected add command: group=%d operator=%d member=%d", groupID, operatorID, memberID)
+			}
+			return nil
+		}
+		router, token := groupTestRouter(t, stub)
+		recorder := serveGroupRequest(router, token, http.MethodPost, "/api/v1/group/9/member", `{"member_id":8}`)
+		assertVoidGroupSuccess(t, recorder)
+	})
+
+	t.Run("remove member", func(t *testing.T) {
+		stub := completeGroupStub()
+		stub.removeMember = func(_ context.Context, groupID, operatorID, memberID int64) error {
+			if groupID != 9 || operatorID != 7 || memberID != 8 {
+				t.Fatalf("unexpected remove command: group=%d operator=%d member=%d", groupID, operatorID, memberID)
+			}
+			return nil
+		}
+		router, token := groupTestRouter(t, stub)
+		recorder := serveGroupRequest(router, token, http.MethodDelete, "/api/v1/group/9/member/8", "")
+		assertVoidGroupSuccess(t, recorder)
+	})
+
+	t.Run("member page", func(t *testing.T) {
+		joinedAt := time.Date(2026, 8, 31, 10, 0, 0, 0, time.UTC)
+		stub := completeGroupStub()
+		stub.listMembers = func(_ context.Context, groupID, viewerID int64, limit, offset int) (service.Page[service.GroupMemberListItem], error) {
+			if groupID != 9 || viewerID != 7 || limit != 2 || offset != 1 {
+				t.Fatalf("unexpected list command: group=%d viewer=%d limit=%d offset=%d", groupID, viewerID, limit, offset)
+			}
+			return service.Page[service.GroupMemberListItem]{
+				Items: []service.GroupMemberListItem{{
+					GroupMember: model.GroupMember{ID: 11, GroupID: 9, UserID: 8, Role: model.GroupRoleMember, JoinedAt: joinedAt},
+					Username:    "bob", AvatarURL: "/bob.png",
+				}},
+				Total: 4, Limit: limit, Offset: offset,
+			}, nil
+		}
+		router, token := groupTestRouter(t, stub)
+		recorder := serveGroupRequest(router, token, http.MethodGet, "/api/v1/group/9/members?limit=2&offset=1", "")
+		if recorder.Code != http.StatusOK {
+			t.Fatalf("status=%d body=%s", recorder.Code, recorder.Body.String())
+		}
+		var response struct {
+			Code int                                       `json:"code"`
+			Data PageResponse[service.GroupMemberListItem] `json:"data"`
+		}
+		if err := json.Unmarshal(recorder.Body.Bytes(), &response); err != nil {
+			t.Fatal(err)
+		}
+		if response.Code != CodeSuccess || len(response.Data.Items) != 1 || response.Data.Items[0].UserID != 8 ||
+			response.Data.Items[0].Username != "bob" || response.Data.Pagination.Total != 4 ||
+			response.Data.Pagination.Limit != 2 || response.Data.Pagination.Offset != 1 || !response.Data.Pagination.HasMore {
+			t.Fatalf("unexpected member page response: %+v", response)
+		}
+	})
+}
+
 func TestGroupHandlerRejectsInvalidIDsAndJSONBeforeService(t *testing.T) {
 	stub := completeGroupStub()
 	stub.create = func(context.Context, int64, string, string) (int64, error) {
@@ -171,13 +248,26 @@ func TestGroupHandlerRejectsInvalidIDsAndJSONBeforeService(t *testing.T) {
 		t.Fatal("update service must not run for an invalid group ID or JSON")
 		return nil
 	}
+	stub.addMember = func(context.Context, int64, int64, int64) error {
+		t.Fatal("add service must not run for invalid IDs or JSON")
+		return nil
+	}
+	stub.removeMember = func(context.Context, int64, int64, int64) error {
+		t.Fatal("remove service must not run for invalid IDs")
+		return nil
+	}
+	stub.listMembers = func(context.Context, int64, int64, int, int) (service.Page[service.GroupMemberListItem], error) {
+		t.Fatal("list members service must not run for invalid IDs or pagination")
+		return service.Page[service.GroupMemberListItem]{}, nil
+	}
 	router, token := groupTestRouter(t, stub)
 
 	tests := []struct {
-		name   string
-		method string
-		path   string
-		body   string
+		name    string
+		method  string
+		path    string
+		body    string
+		message string
 	}{
 		{name: "get non-number ID", method: http.MethodGet, path: "/api/v1/group/not-a-number"},
 		{name: "get zero ID", method: http.MethodGet, path: "/api/v1/group/0"},
@@ -188,10 +278,24 @@ func TestGroupHandlerRejectsInvalidIDsAndJSONBeforeService(t *testing.T) {
 		{name: "create missing name", method: http.MethodPost, path: "/api/v1/group", body: `{"notice":"hello"}`},
 		{name: "update malformed JSON", method: http.MethodPut, path: "/api/v1/group/9", body: `{"name":`},
 		{name: "update missing name", method: http.MethodPut, path: "/api/v1/group/9", body: `{"notice":"hello"}`},
+		{name: "add invalid group ID", method: http.MethodPost, path: "/api/v1/group/nope/member", body: `{"member_id":8}`},
+		{name: "add malformed JSON", method: http.MethodPost, path: "/api/v1/group/9/member", body: `{"member_id":`},
+		{name: "add missing member", method: http.MethodPost, path: "/api/v1/group/9/member", body: `{}`},
+		{name: "add zero member", method: http.MethodPost, path: "/api/v1/group/9/member", body: `{"member_id":0}`},
+		{name: "remove non-number member", method: http.MethodDelete, path: "/api/v1/group/9/member/nope"},
+		{name: "remove zero member", method: http.MethodDelete, path: "/api/v1/group/9/member/0"},
+		{name: "members invalid limit", method: http.MethodGet, path: "/api/v1/group/9/members?limit=101", message: "limit must be between 1 and 100"},
+		{name: "members zero limit", method: http.MethodGet, path: "/api/v1/group/9/members?limit=0", message: "limit must be between 1 and 100"},
+		{name: "members negative offset", method: http.MethodGet, path: "/api/v1/group/9/members?offset=-1", message: "offset must be a non-negative integer"},
+		{name: "members non-number offset", method: http.MethodGet, path: "/api/v1/group/9/members?offset=nope", message: "offset must be a non-negative integer"},
 	}
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
 			recorder := serveGroupRequest(router, token, test.method, test.path, test.body)
+			if test.message != "" {
+				assertGroupHandlerErrorMessage(t, recorder, http.StatusBadRequest, apperror.CodeInvalidParam, test.message)
+				return
+			}
 			assertGroupHandlerError(t, recorder, http.StatusBadRequest, apperror.CodeInvalidParam)
 		})
 	}
@@ -241,6 +345,29 @@ func TestGroupHandlerMapsServiceBusinessErrors(t *testing.T) {
 				stub.update = func(context.Context, int64, int64, string, string) error { return err }
 			},
 		},
+		{
+			name: "invitee is not friend", method: http.MethodPost, path: "/api/v1/group/9/member",
+			body: `{"member_id":8}`, code: apperror.CodeMemberNotFriend,
+			configure: func(stub *groupServiceStub, err error) {
+				stub.addMember = func(context.Context, int64, int64, int64) error { return err }
+			},
+		},
+		{
+			name: "administrator cannot remove peer", method: http.MethodDelete, path: "/api/v1/group/9/member/8",
+			code: apperror.CodeCannotRemovePeer,
+			configure: func(stub *groupServiceStub, err error) {
+				stub.removeMember = func(context.Context, int64, int64, int64) error { return err }
+			},
+		},
+		{
+			name: "outsider cannot list members", method: http.MethodGet, path: "/api/v1/group/9/members?limit=20&offset=0",
+			code: apperror.CodeGroupNotMember,
+			configure: func(stub *groupServiceStub, err error) {
+				stub.listMembers = func(context.Context, int64, int64, int, int) (service.Page[service.GroupMemberListItem], error) {
+					return service.Page[service.GroupMemberListItem]{}, err
+				}
+			},
+		},
 	}
 
 	for _, test := range tests {
@@ -255,7 +382,7 @@ func TestGroupHandlerMapsServiceBusinessErrors(t *testing.T) {
 	}
 }
 
-func groupTestRouter(t *testing.T, groups service.GroupProfileService) (*gin.Engine, string) {
+func groupTestRouter(t *testing.T, groups service.GroupCoreService) (*gin.Engine, string) {
 	t.Helper()
 	gin.SetMode(gin.TestMode)
 	manager, err := authtoken.NewManager(
@@ -305,6 +432,41 @@ func assertGroupHandlerError(t *testing.T, recorder *httptest.ResponseRecorder, 
 	}
 }
 
+func assertGroupHandlerErrorMessage(t *testing.T, recorder *httptest.ResponseRecorder, status int, code apperror.Code, message string) {
+	t.Helper()
+	if recorder.Code != status {
+		t.Fatalf("status=%d body=%s; want status=%d", recorder.Code, recorder.Body.String(), status)
+	}
+	var response struct {
+		Code    int    `json:"code"`
+		Message string `json:"message"`
+	}
+	if err := json.Unmarshal(recorder.Body.Bytes(), &response); err != nil {
+		t.Fatal(err)
+	}
+	if response.Code != int(code) || response.Message != message {
+		t.Fatalf("unexpected error response: %+v; want code=%d message=%q", response, code, message)
+	}
+}
+
+func assertVoidGroupSuccess(t *testing.T, recorder *httptest.ResponseRecorder) {
+	t.Helper()
+	if recorder.Code != http.StatusOK {
+		t.Fatalf("status=%d body=%s", recorder.Code, recorder.Body.String())
+	}
+	var response map[string]json.RawMessage
+	if err := json.Unmarshal(recorder.Body.Bytes(), &response); err != nil {
+		t.Fatal(err)
+	}
+	var code int
+	if err := json.Unmarshal(response["code"], &code); err != nil || code != CodeSuccess {
+		t.Fatalf("unexpected response: %s", recorder.Body.String())
+	}
+	if _, exists := response["data"]; exists {
+		t.Fatalf("void success must omit data: %s", recorder.Body.String())
+	}
+}
+
 func completeGroupStub() groupServiceStub {
 	return groupServiceStub{
 		create: func(context.Context, int64, string, string) (int64, error) { return 1, nil },
@@ -314,8 +476,13 @@ func completeGroupStub() groupServiceStub {
 		get: func(context.Context, int64, int64) (*model.Group, error) {
 			return &model.Group{}, nil
 		},
-		update: func(context.Context, int64, int64, string, string) error { return nil },
+		update:       func(context.Context, int64, int64, string, string) error { return nil },
+		addMember:    func(context.Context, int64, int64, int64) error { return nil },
+		removeMember: func(context.Context, int64, int64, int64) error { return nil },
+		listMembers: func(context.Context, int64, int64, int, int) (service.Page[service.GroupMemberListItem], error) {
+			return service.Page[service.GroupMemberListItem]{Items: make([]service.GroupMemberListItem, 0)}, nil
+		},
 	}
 }
 
-var _ service.GroupProfileService = groupServiceStub{}
+var _ service.GroupCoreService = groupServiceStub{}

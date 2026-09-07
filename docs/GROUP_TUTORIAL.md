@@ -11,7 +11,7 @@
 | 群详情 | `GET /api/v1/group/:groupID` | `Group` |
 | 更新资料 | `PUT /api/v1/group/:groupID` | 省略 `data` |
 
-四个接口都需要登录后的 access token。成员邀请、成员列表、角色修改、退群和转让群主属于 `GROUP-002～004`，本阶段仍会明确返回 501。
+四个接口都需要登录后的 access token。成员邀请、移除和分页列表已经在 `GROUP-002` 完成，详见 [GROUP_MEMBER_TUTORIAL.md](GROUP_MEMBER_TUTORIAL.md)；角色修改、退群和转让群主仍属于 `GROUP-003～004`。
 
 ## 1. 先建立一个正确的心智模型
 
@@ -218,28 +218,30 @@ HTTP 仍返回建群成功
 
 这是诚实的错误语义。不能告诉客户端“创建失败”，因为 MySQL 里群已经真实存在；客户端重试反而可能创建第二个群。协调事件和核心数据在同一事务中，保证成功落库的状态一定留下可重试凭据。
 
-## 8. 为什么又增加了 GroupProfileService
+## 8. 为什么要拆分群服务接口
 
 原来的 `GroupService` 同时声明了 GROUP-001～004 的全部方法。如果 Handler 直接依赖它，实现第一步时就被迫为成员邀请、角色、转让群主等未完成功能写假方法。
 
-[contracts.go](../backend/internal/service/contracts.go) 现在把当前能力拆成：
+[contracts.go](../backend/internal/service/contracts.go) 现在按已经落地的能力组合接口：
 
 ```text
-GroupProfileService       // 已完成的四个资料用例
-GroupService              // 嵌入上面接口，再声明后续成员/角色用例
+GroupProfileService       // GROUP-001 的四个资料用例
+GroupMemberService        // GROUP-002 的添加、移除、分页列表
+GroupCoreService          // 组合上面两个已完成接口，供 Router 使用
+GroupService              // 再嵌入 Core，声明后续角色/转让/退群
 ```
 
-这叫接口隔离：调用者只依赖它真正使用的能力。未实现的成员路由继续由 Router 返回结构化 501，而不是用“return nil”的空实现假装完成。
+这叫接口隔离：调用者只依赖它真正使用的能力。成员路由在 GROUP-002 完成后改为真实 Handler；尚未完成的角色、退群和转让路由仍返回结构化 501，而不是用空实现假装完成。
 
 ## 9. 前端怎样接上这四个接口
 
 前端 API 已在 [groups.ts](../frontend/src/api/groups.ts) 中定义。本次还补了三处真正影响使用的衔接：
 
 1. 登录初始化会主动请求 `/group/list`，所以刷新页面后能恢复群会话，不必等待尚未完成的离线消息同步。
-2. 即使 GROUP-002 的成员列表暂未实现，当前用户只要等于 `group.owner_id`，也能看到“编辑资料”按钮。
+2. 当前用户等于 `group.owner_id` 时始终被识别为真实群主；GROUP-002 又补上了完整成员分页，因此管理员权限也能从成员资料恢复。
 3. 改名成功会同步更新本地会话标题，不需要刷新页面。
 
-前端仍不会提前开放邀请成员、设管理员或退群逻辑；这些能力要等对应后端任务完成。
+前端现在已经开放好友邀请、成员列表和有权限的移除操作。设管理员、退群和转让群主仍等待对应后端任务完成。
 
 ## 10. 自己动手调用接口
 
@@ -292,9 +294,10 @@ WHERE resource_type = 'group_members' AND resource_id = 你的群ID;
 
 测试分三层：
 
-- [group_test.go](../backend/internal/service/group_test.go)：内存 fake 验证事务回滚、权限矩阵、校验边界、Redis 失败兜底。
+- [group_test.go](../backend/internal/service/group_test.go)：内存 fake 验证资料与成员事务回滚、权限矩阵、校验边界、Redis 失败兜底。
 - [group_handler_test.go](../backend/internal/api/group_handler_test.go)：真实 JWT + HTTP Router 验证状态码、统一信封、参数绑定和空数组。
-- [group_integration_test.go](../backend/internal/service/group_integration_test.go)：真实 MySQL 验证 SQL、事务、JOIN 列表和权限。
+- [group_integration_test.go](../backend/internal/service/group_integration_test.go)：真实 MySQL 验证 GROUP-001 的 SQL、事务、JOIN 列表和权限。
+- [group_members_integration_test.go](../backend/internal/service/group_members_integration_test.go)：真实 MySQL/Redis 验证 GROUP-002 的分页、并发容量与双向缓存投影。
 - 前端 group 测试：验证登录恢复群列表、跨用户请求竞态、群主编辑按钮和改名同步。
 
 日常快速验证：

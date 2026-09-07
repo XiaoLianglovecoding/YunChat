@@ -144,6 +144,8 @@ go run ./cmd/cachectl -c configs/config.local.yaml -action audit -scope all
 - [工程与基础设施小白教程](docs/FOUNDATION_TUTORIAL.md)：本阶段代码的逐层原理、命令与故障实验。
 - [账户与鉴权小白教程](docs/AUTH_TUTORIAL.md)：从密码哈希、JWT、Redis 轮换到头像上传的完整讲解。
 - [好友与缓存真相小白教程](docs/FRIEND_CACHE_TUTORIAL.md)：从并发申请、双向好友事务到 Redis 回源、Outbox 修复和实时事件。
+- [群资料小白教程](docs/GROUP_TUTORIAL.md)：从建群事务、成员关系到资料查询与更新。
+- [群成员管理小白教程](docs/GROUP_MEMBER_TUTORIAL.md)：好友邀请、移除权限、并发容量、分页与 Redis 正反向一致性。
 - [架构说明](docs/ARCHITECTURE.md)：模块边界、目标数据流和源码/文档漂移。
 - [数据库与中间件契约](docs/DATABASE.md)：13 张表、Redis 键、MQ 队列和一致性风险。
 - [前端复制与联调说明](docs/FRONTEND_COPY.md)：复制范围、环境变量和后端耦合点。

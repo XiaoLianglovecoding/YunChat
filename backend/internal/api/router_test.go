@@ -110,3 +110,35 @@ func TestEveryProtectedRouteRequiresAuthorization(t *testing.T) {
 		}
 	}
 }
+
+func TestGroup002RoutesReplaceTodoWithoutOpeningLaterGroupTasks(t *testing.T) {
+	router, token := groupTestRouter(t, completeGroupStub())
+	for _, request := range []struct {
+		method string
+		path   string
+		body   string
+	}{
+		{method: http.MethodPost, path: "/api/v1/group/9/member", body: `{"member_id":8}`},
+		{method: http.MethodDelete, path: "/api/v1/group/9/member/8"},
+		{method: http.MethodGet, path: "/api/v1/group/9/members?limit=20&offset=0"},
+	} {
+		recorder := serveGroupRequest(router, token, request.method, request.path, request.body)
+		if recorder.Code != http.StatusOK {
+			t.Fatalf("%s %s status=%d body=%s, want GROUP-002 handler", request.method, request.path, recorder.Code, recorder.Body.String())
+		}
+	}
+
+	for _, request := range []struct {
+		method string
+		path   string
+		body   string
+	}{
+		{method: http.MethodPut, path: "/api/v1/group/9/member/8/role", body: `{"role":1}`},
+		{method: http.MethodPost, path: "/api/v1/group/9/leave"},
+	} {
+		recorder := serveGroupRequest(router, token, request.method, request.path, request.body)
+		if recorder.Code != http.StatusNotImplemented {
+			t.Fatalf("%s %s status=%d body=%s, want later task to remain 501", request.method, request.path, recorder.Code, recorder.Body.String())
+		}
+	}
+}

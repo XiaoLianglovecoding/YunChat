@@ -32,7 +32,7 @@ type RouterOptions struct {
 	Profile        service.ProfileService
 	Upload         service.UploadService
 	Friend         service.FriendService
-	Group          service.GroupProfileService
+	Group          service.GroupCoreService
 	WebSocket      gin.HandlerFunc
 	FileMaxSizeMB  int
 }
@@ -189,6 +189,9 @@ func NewRouter(opts RouterOptions) *gin.Engine {
 		handlers[routeKey(http.MethodGet, "/group/list")] = groupHandler.List
 		handlers[routeKey(http.MethodGet, "/group/:groupID")] = groupHandler.Get
 		handlers[routeKey(http.MethodPut, "/group/:groupID")] = groupHandler.Update
+		handlers[routeKey(http.MethodPost, "/group/:groupID/member")] = groupHandler.AddMember
+		handlers[routeKey(http.MethodDelete, "/group/:groupID/member/:memberID")] = groupHandler.RemoveMember
+		handlers[routeKey(http.MethodGet, "/group/:groupID/members")] = groupHandler.ListMembers
 	}
 
 	v1 := r.Group("/api/v1")

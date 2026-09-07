@@ -10,9 +10,9 @@ import (
 	"my-im/internal/service"
 )
 
-type GroupHandler struct{ groups service.GroupProfileService }
+type GroupHandler struct{ groups service.GroupCoreService }
 
-func NewGroupHandler(groups service.GroupProfileService) *GroupHandler {
+func NewGroupHandler(groups service.GroupCoreService) *GroupHandler {
 	return &GroupHandler{groups: groups}
 }
 
@@ -85,11 +85,77 @@ func (h *GroupHandler) Update(c *gin.Context) {
 	WriteSuccess(c, http.StatusOK, nil)
 }
 
+func (h *GroupHandler) AddMember(c *gin.Context) {
+	userID, ok := currentUserID(c)
+	if !ok {
+		return
+	}
+	groupID, ok := groupIDParam(c)
+	if !ok {
+		return
+	}
+	var request AddGroupMemberRequest
+	if err := c.ShouldBindJSON(&request); err != nil || request.MemberID <= 0 {
+		WriteError(c, apperror.New(apperror.CodeInvalidParam))
+		return
+	}
+	if err := h.groups.AddMember(c.Request.Context(), groupID, userID, request.MemberID); err != nil {
+		WriteError(c, err)
+		return
+	}
+	WriteSuccess(c, http.StatusOK, nil)
+}
+
+func (h *GroupHandler) RemoveMember(c *gin.Context) {
+	userID, ok := currentUserID(c)
+	if !ok {
+		return
+	}
+	groupID, ok := groupIDParam(c)
+	if !ok {
+		return
+	}
+	memberID, ok := positivePathID(c, "memberID")
+	if !ok {
+		return
+	}
+	if err := h.groups.RemoveMember(c.Request.Context(), groupID, userID, memberID); err != nil {
+		WriteError(c, err)
+		return
+	}
+	WriteSuccess(c, http.StatusOK, nil)
+}
+
+func (h *GroupHandler) ListMembers(c *gin.Context) {
+	userID, ok := currentUserID(c)
+	if !ok {
+		return
+	}
+	groupID, ok := groupIDParam(c)
+	if !ok {
+		return
+	}
+	limit, offset, ok := pagination(c)
+	if !ok {
+		return
+	}
+	page, err := h.groups.ListMembers(c.Request.Context(), groupID, userID, limit, offset)
+	if err != nil {
+		WriteError(c, err)
+		return
+	}
+	WriteSuccess(c, http.StatusOK, pageResponse(page))
+}
+
 func groupIDParam(c *gin.Context) (int64, bool) {
-	groupID, err := strconv.ParseInt(c.Param("groupID"), 10, 64)
-	if err != nil || groupID <= 0 {
+	return positivePathID(c, "groupID")
+}
+
+func positivePathID(c *gin.Context, name string) (int64, bool) {
+	value, err := strconv.ParseInt(c.Param(name), 10, 64)
+	if err != nil || value <= 0 {
 		WriteError(c, apperror.New(apperror.CodeInvalidParam))
 		return 0, false
 	}
-	return groupID, true
+	return value, true
 }

@@ -8,7 +8,8 @@ import { goimSocket } from "../realtime/socket";
 import { useAuthStore } from "../stores/authStore";
 import { useChatStore, type ChatMessage } from "../stores/chatStore";
 import { CreateGroupDrawer, GroupManagementDrawer } from "../features/groups/GroupManagement";
-import { groupsApi, settingsApi } from "../lib/api";
+import { fetchAllGroupMembers, groupMembersQueryKey } from "../features/groups/groupMembers";
+import { settingsApi } from "../lib/api";
 
 const emptyMessages: ChatMessage[] = [];
 
@@ -36,8 +37,8 @@ export function ChatPage() {
   const selected = conversations.find((item) => item.id === conversationId);
   const selectedId = selected?.id;
   const groupMembersQuery = useQuery({
-    queryKey: ["group-members", selected?.targetId],
-    queryFn: () => groupsApi.members(selected!.targetId, 500, 0),
+    queryKey: groupMembersQueryKey(selected?.targetId ?? 0),
+    queryFn: () => fetchAllGroupMembers(selected!.targetId),
     enabled: Boolean(selected?.group && !previewMode),
   });
   const groupMembers = groupMembersQuery.data?.items ?? [];

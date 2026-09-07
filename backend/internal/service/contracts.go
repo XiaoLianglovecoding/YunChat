@@ -68,8 +68,7 @@ type GroupMemberListItem struct {
 	AvatarURL string `json:"avatar_url,omitempty"`
 }
 
-// GroupProfileService 是 GROUP-001 已落地的用例边界。后续成员管理接口继续
-// 留在 GroupService，避免当前 Handler 被尚未实现的方法绑住。
+// GroupProfileService 是 GROUP-001 已落地的资料用例边界。
 type GroupProfileService interface {
 	Create(context.Context, int64, string, string) (int64, error)
 	ListByUser(context.Context, int64) ([]model.Group, error)
@@ -77,15 +76,25 @@ type GroupProfileService interface {
 	Update(context.Context, int64, int64, string, string) error
 }
 
-type GroupService interface {
+type GroupMemberService interface {
+	AddMember(context.Context, int64, int64, int64) error
+	RemoveMember(context.Context, int64, int64, int64) error
+	ListMembers(context.Context, int64, int64, int, int) (Page[GroupMemberListItem], error)
+}
+
+// GroupCoreService 汇总目前已经落地的 GROUP-001 和 GROUP-002。
+// 角色、转让和退群继续留在更完整的 GroupService 中。
+type GroupCoreService interface {
 	GroupProfileService
-	AddMember(context.Context, int64, int64, int64) error                                   // TODO[GROUP-002]
-	RemoveMember(context.Context, int64, int64, int64) error                                // TODO[GROUP-002]
-	ListMembers(context.Context, int64, int64, int, int) (Page[GroupMemberListItem], error) // TODO[GROUP-002]
-	UpdateRole(context.Context, int64, int64, int64, int) error                             // TODO[GROUP-003]
-	MuteMember(context.Context, int64, int64, int64, *time.Time) error                      // TODO[GROUP-003]
-	TransferOwnership(context.Context, int64, int64, int64) error                           // TODO[GROUP-004]
-	Leave(context.Context, int64, int64) error                                              // TODO[GROUP-004]
+	GroupMemberService
+}
+
+type GroupService interface {
+	GroupCoreService
+	UpdateRole(context.Context, int64, int64, int64, int) error        // TODO[GROUP-003]
+	MuteMember(context.Context, int64, int64, int64, *time.Time) error // TODO[GROUP-003]
+	TransferOwnership(context.Context, int64, int64, int64) error      // TODO[GROUP-004]
+	Leave(context.Context, int64, int64) error                         // TODO[GROUP-004]
 }
 
 type MessageService interface {

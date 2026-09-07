@@ -59,6 +59,7 @@ export function Drawer({ open, title, description, onClose, children }: OverlayP
 
 interface ConfirmDialogProps extends Omit<OverlayProps, "children"> {
   confirmLabel?: string;
+  confirming?: boolean;
   destructive?: boolean;
   onConfirm: () => void;
 }
@@ -69,6 +70,7 @@ export function ConfirmDialog({
   description,
   onClose,
   confirmLabel = "确认",
+  confirming = false,
   destructive,
   onConfirm,
 }: ConfirmDialogProps) {
@@ -91,8 +93,8 @@ export function ConfirmDialog({
             <h2>{title}</h2>
             {description && <p>{description}</p>}
             <footer>
-              <Button variant="secondary" onClick={onClose}>取消</Button>
-              <Button variant={destructive ? "danger" : "primary"} onClick={onConfirm}>{confirmLabel}</Button>
+              <Button disabled={confirming} variant="secondary" onClick={onClose}>取消</Button>
+              <Button loading={confirming} variant={destructive ? "danger" : "primary"} onClick={onConfirm}>{confirmLabel}</Button>
             </footer>
           </motion.div>
         </div>

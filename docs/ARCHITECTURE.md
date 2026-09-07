@@ -155,6 +155,22 @@ POST /group
 
 建群提交后的 Redis 刷新是加速，不是业务真相。刷新失败时 HTTP 仍返回成功，因为同一 MySQL 事务里的协调事件会由后台 Worker 重试；详见 `docs/GROUP_TUTORIAL.md`。
 
+### 群成员管理
+
+```text
+POST/DELETE /group/:groupID/member...
+  -> GroupHandler：校验 JWT 用户、路径 ID 与请求体
+  -> GroupCoreService：锁 groups 行，检查真实群主/管理员权限
+  -> 添加：锁双方 users 行 -> 校验好友/重复/容量 -> INSERT member(role=0)
+  -> 移除：锁目标 member -> 检查群主/管理员权限矩阵 -> DELETE member
+  -> 同一 MySQL 事务写 cache_reconcile_events(group_members, groupID)
+  -> COMMIT 后 ReconcileGroupMembers 全量重建正向 Set、角色 Hash 与反向 Set
+```
+
+同一个群的所有成员写入都先锁 `groups` 行，因此 `COUNT + INSERT` 在容量边界不会被两个并发邀请同时穿透。真实群主只认 `groups.owner_id`；群主可移除管理员和普通成员，管理员只能移除普通成员，任何人都不能通过移除接口删除真实群主。`GET /group/:groupID/members` 只允许当前成员读取，使用 MySQL JOIN 补齐用户名/头像并提供 `limit/offset` 分页；Redis 只服务快速权限投影，不承担权威成员列表。
+
+前端以每页 100 条循环收齐当前最多 500 人，并让聊天页与管理抽屉共享同一个 Query Key。完整设计、错误码与手工验证见 `docs/GROUP_MEMBER_TUTORIAL.md`。
+
 启动预热调用 `CacheTruthService.Warm`，沿用有界 owner index；运维 `cachectl rebuild` 调用严格 `Rebuild`，会在资源锁内重置索引 marker，并通过增量 SCAN 清理索引外人工孤儿。这样日常请求不承担全库扫描成本，显式修复又能兑现审计结果。
 
 ## 当前安全策略

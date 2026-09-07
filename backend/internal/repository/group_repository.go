@@ -5,6 +5,7 @@ import (
 	"database/sql"
 	"errors"
 	"fmt"
+	"sort"
 
 	"my-im/internal/model"
 )
@@ -23,11 +24,23 @@ type GroupRepository interface {
 	GetGroupForUpdate(context.Context, int64) (*model.Group, error)
 	GetGroupMember(context.Context, int64, int64) (*model.GroupMember, error)
 	GetGroupMemberForUpdate(context.Context, int64, int64) (*model.GroupMember, error)
+	LockGroupUsers(context.Context, int64, int64) (int, error)
+	IsFriendPair(context.Context, int64, int64) (bool, error)
+	CountGroupMembers(context.Context, int64) (int64, error)
+	RemoveGroupMember(context.Context, int64, int64) error
+	ListGroupMembersPage(context.Context, int64, int, int) ([]GroupMemberProfile, error)
 	ListGroupsByUser(context.Context, int64) ([]model.Group, error)
 	UpdateGroupProfile(context.Context, int64, string, string) error
 }
 
-// WithinGroupTransaction 保证建群时群资料和群主成员要么一起成功，要么一起回滚。
+// GroupMemberProfile 是 MySQL JOIN 得到的成员与公开用户资料投影。
+type GroupMemberProfile struct {
+	model.GroupMember
+	Username  string
+	AvatarURL string
+}
+
+// WithinGroupTransaction 保证群资料、成员变化与缓存协调事件一起提交或回滚。
 func (m *MySQLRepoImpl) WithinGroupTransaction(ctx context.Context, fn func(context.Context, GroupRepository) error) error {
 	if m.root == nil {
 		return errors.New("group transaction requires a root database handle")
@@ -71,6 +84,28 @@ func (m *MySQLRepoImpl) LockGroupCreator(ctx context.Context, userID int64) (boo
 	return true, nil
 }
 
+// LockGroupUsers 按用户 ID 升序锁行，使好友删除与群邀请并发时看到确定结果。
+func (m *MySQLRepoImpl) LockGroupUsers(ctx context.Context, firstID, secondID int64) (int, error) {
+	ids := []int64{firstID, secondID}
+	sort.Slice(ids, func(i, j int) bool { return ids[i] < ids[j] })
+	if ids[0] == ids[1] {
+		ids = ids[:1]
+	}
+	locked := 0
+	for _, userID := range ids {
+		var foundID int64
+		err := m.db.QueryRowContext(ctx, `SELECT id FROM users WHERE id = ? FOR UPDATE`, userID).Scan(&foundID)
+		if errors.Is(err, sql.ErrNoRows) {
+			continue
+		}
+		if err != nil {
+			return 0, fmt.Errorf("lock group operation user %d: %w", userID, err)
+		}
+		locked++
+	}
+	return locked, nil
+}
+
 func (m *MySQLRepoImpl) GetGroupForUpdate(ctx context.Context, groupID int64) (*model.Group, error) {
 	const query = "SELECT id, name, COALESCE(notice, ''), owner_id, max_members, created_at, updated_at " +
 		"FROM `groups` WHERE id = ? FOR UPDATE"
@@ -85,6 +120,45 @@ func (m *MySQLRepoImpl) GetGroupMember(ctx context.Context, groupID, userID int6
 func (m *MySQLRepoImpl) GetGroupMemberForUpdate(ctx context.Context, groupID, userID int64) (*model.GroupMember, error) {
 	return scanGroupMember(m.db.QueryRowContext(ctx, `SELECT id, group_id, user_id, role, muted_until, joined_at
 		FROM group_members WHERE group_id = ? AND user_id = ? FOR UPDATE`, groupID, userID))
+}
+
+func (m *MySQLRepoImpl) CountGroupMembers(ctx context.Context, groupID int64) (int64, error) {
+	var total int64
+	if err := m.db.QueryRowContext(ctx,
+		`SELECT COUNT(*) FROM group_members WHERE group_id = ?`, groupID,
+	).Scan(&total); err != nil {
+		return 0, fmt.Errorf("count group members: %w", err)
+	}
+	return total, nil
+}
+
+func (m *MySQLRepoImpl) ListGroupMembersPage(ctx context.Context, groupID int64, limit, offset int) ([]GroupMemberProfile, error) {
+	const query = `SELECT gm.id, gm.group_id, gm.user_id, gm.role, gm.muted_until, gm.joined_at,
+		u.username, COALESCE(u.avatar_url, '')
+		FROM group_members gm
+		JOIN users u ON u.id = gm.user_id
+		WHERE gm.group_id = ?
+		ORDER BY gm.role DESC, gm.joined_at ASC, gm.id ASC
+		LIMIT ? OFFSET ?`
+	rows, err := m.db.QueryContext(ctx, query, groupID, limit, offset)
+	if err != nil {
+		return nil, fmt.Errorf("list group members page: %w", err)
+	}
+	defer rows.Close()
+
+	members := make([]GroupMemberProfile, 0)
+	for rows.Next() {
+		var member GroupMemberProfile
+		if err := rows.Scan(&member.ID, &member.GroupID, &member.UserID, &member.Role,
+			&member.MutedUntil, &member.JoinedAt, &member.Username, &member.AvatarURL); err != nil {
+			return nil, fmt.Errorf("scan group member profile: %w", err)
+		}
+		members = append(members, member)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("iterate group member profiles: %w", err)
+	}
+	return members, nil
 }
 
 func scanGroupMember(row *sql.Row) (*model.GroupMember, error) {

@@ -184,6 +184,8 @@
 .group-add-member h3, .group-add-member p { margin: 0; font-size: 11px; }
 .group-add-member p { color: var(--color-text-tertiary); }
 .group-add-member { max-height: min(210px, 25vh); overflow-y: auto; overscroll-behavior: contain; scrollbar-width: thin; scrollbar-color: rgba(40,44,56,.18) transparent; }
+.group-query-state { display: flex; min-height: 36px; align-items: center; justify-content: space-between; gap: 10px; }
+.group-query-state p { margin: 0; color: var(--color-text-tertiary); font-size: 9px; line-height: 1.5; }
 .group-invite-row { display: grid; grid-template-columns: auto 1fr auto; align-items: center; gap: 9px; padding-top: 9px; border-top: 1px solid var(--color-border); }
 .group-invite-row > span { display: grid; gap: 3px; }
 .group-invite-row strong { font-size: 10px; }

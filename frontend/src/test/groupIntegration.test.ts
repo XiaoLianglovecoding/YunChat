@@ -35,6 +35,9 @@ describe("GROUP-001 frontend integration", () => {
 
     const admin = { role: 1 } as GroupMember;
     expect(canManageGroupProfile(group, admin, 2)).toBe(true);
+
+    const staleSecondOwner = { role: 2 } as GroupMember;
+    expect(canManageGroupProfile(group, staleSecondOwner, 2)).toBe(false);
   });
 
   it("hydrates group conversations directly from the authenticated user's group list", async () => {

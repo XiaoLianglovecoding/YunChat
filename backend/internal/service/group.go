@@ -16,6 +16,9 @@ import (
 const (
 	maxGroupNameRunes   = 50
 	maxGroupNoticeRunes = 300
+
+	defaultGroupMemberPageSize = 20
+	maxGroupMemberPageSize     = 100
 )
 
 type GroupServiceImpl struct {
@@ -23,8 +26,8 @@ type GroupServiceImpl struct {
 	cache      GroupCacheRefresher
 }
 
-// GroupCacheRefresher 是建群提交后的 Redis 快速刷新端口。
-// MySQL 事务已经写入协调事件，因此这里失败不会把成功建群伪装成失败。
+// GroupCacheRefresher 是群成员事务提交后的 Redis 快速刷新端口。
+// MySQL 事务已经写入协调事件，因此这里失败不会把已提交的业务伪装成失败。
 type GroupCacheRefresher interface {
 	ReconcileGroupMembers(context.Context, int64) error
 }
@@ -89,9 +92,184 @@ func (s *GroupServiceImpl) Create(ctx context.Context, ownerID int64, rawName, r
 		return 0, groupServiceError(err)
 	}
 	if s.cache != nil {
-		_ = s.cache.ReconcileGroupMembers(context.WithoutCancel(ctx), group.ID)
+		s.refreshGroupMemberCache(ctx, group.ID)
 	}
 	return group.ID, nil
+}
+
+func (s *GroupServiceImpl) AddMember(ctx context.Context, groupID, operatorID, memberID int64) error {
+	if groupID <= 0 || operatorID <= 0 || memberID <= 0 {
+		return apperror.New(apperror.CodeInvalidParam)
+	}
+	err := s.repository.WithinGroupTransaction(ctx, func(txCtx context.Context, tx repository.GroupRepository) error {
+		group, err := tx.GetGroupForUpdate(txCtx, groupID)
+		if err != nil {
+			return err
+		}
+		if group == nil {
+			return apperror.New(apperror.CodeGroupNotFound)
+		}
+		operator, err := tx.GetGroupMemberForUpdate(txCtx, groupID, operatorID)
+		if err != nil {
+			return err
+		}
+		if !canManageGroupMembers(group, operator, operatorID) {
+			return apperror.New(apperror.CodeNotOwnerOrAdmin)
+		}
+		existing, err := tx.GetGroupMemberForUpdate(txCtx, groupID, memberID)
+		if err != nil {
+			return err
+		}
+		if existing != nil {
+			return apperror.New(apperror.CodeAlreadyMember)
+		}
+		lockedUsers, err := tx.LockGroupUsers(txCtx, operatorID, memberID)
+		if err != nil {
+			return err
+		}
+		if lockedUsers != 2 {
+			return apperror.New(apperror.CodeUserNotFound)
+		}
+		friends, err := tx.IsFriendPair(txCtx, operatorID, memberID)
+		if err != nil {
+			return err
+		}
+		if !friends {
+			return apperror.New(apperror.CodeMemberNotFriend)
+		}
+		memberCount, err := tx.CountGroupMembers(txCtx, groupID)
+		if err != nil {
+			return err
+		}
+		if memberCount >= int64(group.MaxMembers) {
+			return apperror.New(apperror.CodeGroupFull)
+		}
+		if err := tx.AddGroupMember(txCtx, &model.GroupMember{
+			GroupID: groupID, UserID: memberID, Role: model.GroupRoleMember,
+		}); err != nil {
+			return err
+		}
+		return tx.EnqueueCacheReconcile(txCtx, repository.CacheResourceGroupMembers, groupID)
+	})
+	if err != nil {
+		if errors.Is(err, repository.ErrConflict) {
+			return apperror.New(apperror.CodeAlreadyMember)
+		}
+		return groupServiceError(err)
+	}
+	s.refreshGroupMemberCache(ctx, groupID)
+	return nil
+}
+
+func (s *GroupServiceImpl) RemoveMember(ctx context.Context, groupID, operatorID, memberID int64) error {
+	if groupID <= 0 || operatorID <= 0 || memberID <= 0 {
+		return apperror.New(apperror.CodeInvalidParam)
+	}
+	err := s.repository.WithinGroupTransaction(ctx, func(txCtx context.Context, tx repository.GroupRepository) error {
+		group, err := tx.GetGroupForUpdate(txCtx, groupID)
+		if err != nil {
+			return err
+		}
+		if group == nil {
+			return apperror.New(apperror.CodeGroupNotFound)
+		}
+		operator, err := tx.GetGroupMemberForUpdate(txCtx, groupID, operatorID)
+		if err != nil {
+			return err
+		}
+		if !canManageGroupMembers(group, operator, operatorID) {
+			return apperror.New(apperror.CodeNotOwnerOrAdmin)
+		}
+		target, err := tx.GetGroupMemberForUpdate(txCtx, groupID, memberID)
+		if err != nil {
+			return err
+		}
+		if target == nil {
+			return apperror.New(apperror.CodeGroupMemberNotFound)
+		}
+		if target.UserID == group.OwnerID {
+			return apperror.New(apperror.CodeCannotRemoveOwner)
+		}
+		if group.OwnerID != operatorID && target.Role != model.GroupRoleMember {
+			return apperror.New(apperror.CodeCannotRemovePeer)
+		}
+		if err := tx.RemoveGroupMember(txCtx, groupID, memberID); err != nil {
+			return err
+		}
+		return tx.EnqueueCacheReconcile(txCtx, repository.CacheResourceGroupMembers, groupID)
+	})
+	if err != nil {
+		return groupServiceError(err)
+	}
+	s.refreshGroupMemberCache(ctx, groupID)
+	return nil
+}
+
+func (s *GroupServiceImpl) ListMembers(ctx context.Context, groupID, viewerID int64, limit, offset int) (Page[GroupMemberListItem], error) {
+	if groupID <= 0 || viewerID <= 0 {
+		return Page[GroupMemberListItem]{}, apperror.New(apperror.CodeInvalidParam)
+	}
+	limit, offset, err := normalizeGroupMemberPage(limit, offset)
+	if err != nil {
+		return Page[GroupMemberListItem]{}, err
+	}
+	page := Page[GroupMemberListItem]{Limit: limit, Offset: offset, Items: make([]GroupMemberListItem, 0)}
+	err = s.repository.WithinGroupTransaction(ctx, func(txCtx context.Context, tx repository.GroupRepository) error {
+		group, err := tx.GetGroupForUpdate(txCtx, groupID)
+		if err != nil {
+			return err
+		}
+		if group == nil {
+			return apperror.New(apperror.CodeGroupNotFound)
+		}
+		viewer, err := tx.GetGroupMemberForUpdate(txCtx, groupID, viewerID)
+		if err != nil {
+			return err
+		}
+		if viewer == nil {
+			return apperror.New(apperror.CodeGroupNotMember)
+		}
+		rows, err := tx.ListGroupMembersPage(txCtx, groupID, limit, offset)
+		if err != nil {
+			return err
+		}
+		page.Items = make([]GroupMemberListItem, 0, len(rows))
+		for _, row := range rows {
+			page.Items = append(page.Items, GroupMemberListItem{
+				GroupMember: row.GroupMember, Username: row.Username, AvatarURL: row.AvatarURL,
+			})
+		}
+		page.Total, err = tx.CountGroupMembers(txCtx, groupID)
+		return err
+	})
+	if err != nil {
+		return Page[GroupMemberListItem]{}, groupServiceError(err)
+	}
+	return page, nil
+}
+
+func canManageGroupMembers(group *model.Group, operator *model.GroupMember, operatorID int64) bool {
+	return group != nil && operator != nil &&
+		(group.OwnerID == operatorID || operator.Role == model.GroupRoleAdmin)
+}
+
+func normalizeGroupMemberPage(limit, offset int) (int, int, error) {
+	if offset < 0 {
+		return 0, 0, apperror.WithMessage(apperror.CodeInvalidParam, "offset must not be negative")
+	}
+	if limit <= 0 {
+		limit = defaultGroupMemberPageSize
+	}
+	if limit > maxGroupMemberPageSize {
+		return 0, 0, apperror.WithMessage(apperror.CodeInvalidParam, "limit must not exceed 100")
+	}
+	return limit, offset, nil
+}
+
+func (s *GroupServiceImpl) refreshGroupMemberCache(ctx context.Context, groupID int64) {
+	if s.cache != nil {
+		_ = s.cache.ReconcileGroupMembers(context.WithoutCancel(ctx), groupID)
+	}
 }
 
 func (s *GroupServiceImpl) ListByUser(ctx context.Context, userID int64) ([]model.Group, error) {
@@ -194,4 +372,4 @@ func groupServiceError(err error) error {
 	return apperror.Wrap(apperror.CodeInternalFailure, fmt.Errorf("group service: %w", err))
 }
 
-var _ GroupProfileService = (*GroupServiceImpl)(nil)
+var _ GroupCoreService = (*GroupServiceImpl)(nil)

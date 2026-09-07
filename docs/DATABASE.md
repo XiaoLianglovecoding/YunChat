@@ -131,6 +131,10 @@
 
 GROUP-001 建群就是这条规则的一个完整例子：`groups`、群主 `group_members(role=2)` 与 `cache_reconcile_events(resource_type='group_members')` 在同一事务提交，之后 `ReconcileGroupMembers` 尽力立即重建 Redis。群列表和群详情仍读 MySQL；`user_groups:{uid}` 只是消息权限检查所需的可重建反向投影，不承担权威列表查询。
 
+GROUP-002 成员添加/移除沿用同一规则。事务必须先 `SELECT groups ... FOR UPDATE`，再检查操作者与目标成员；添加还会按 ID 升序锁双方 `users` 行，在锁内确认好友关系并执行 `COUNT + INSERT`。群行锁把同群并发邀请串行化，防止两个请求同时抢到最后一个名额。成员变化和 `cache_reconcile_events(resource_type='group_members')` 同事务提交，提交后只调用全量 `ReconcileGroupMembers`，不使用可能乱序的旧 Redis 增量 Add/Remove。
+
+成员分页从 MySQL 查询：`group_members JOIN users` 补齐 `username/avatar_url`，按 `role DESC, joined_at ASC, id ASC` 稳定排序，`COUNT(*)` 提供真实总数。`limit` 最大 100；非成员不能读取。Redis 的 `group_members:{gid}`、`group_member_info:{gid}` 与 `user_groups:{uid}` 由同一次原子重建共同维护。
+
 好友重建只替换 `friend:{owner}:*`，不会擅自删除另一用户拥有的方向；群成员重建会同时维护 Set、Hash、`user_groups` 和有界 owner index，不在 Lua 中运行全库 `KEYS`。
 
 调用私聊 Lua 前必须先执行 `CacheTruthService.EnsurePrivateAccess(sender, receiver)`；调用群聊 Lua 前执行 `EnsureGroupAccess(groupID)`。因此清空 Redis 后的第一次请求会回源，而不是把“key 不存在”误判成业务关系不存在。
