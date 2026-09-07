@@ -497,6 +497,8 @@ type fakeGroupRepository struct {
 	mutationOutsideTransaction bool
 	addMemberErr               error
 	removeMemberErr            error
+	updateRoleErr              error
+	updateMuteErr              error
 	lockUsersErr               error
 	friendshipErr              error
 	countMembersErr            error
@@ -644,6 +646,35 @@ func (r *fakeGroupRepository) RemoveGroupMember(_ context.Context, groupID, user
 		return r.removeMemberErr
 	}
 	delete(r.members, groupMemberKey{groupID: groupID, userID: userID})
+	return nil
+}
+
+func (r *fakeGroupRepository) UpdateGroupMemberRole(_ context.Context, groupID, userID int64, role int) error {
+	r.markMutation()
+	if r.updateRoleErr != nil {
+		return r.updateRoleErr
+	}
+	key := groupMemberKey{groupID: groupID, userID: userID}
+	member := r.members[key]
+	member.Role = role
+	r.members[key] = member
+	return nil
+}
+
+func (r *fakeGroupRepository) UpdateGroupMemberMute(_ context.Context, groupID, userID int64, mutedUntil *time.Time) error {
+	r.markMutation()
+	if r.updateMuteErr != nil {
+		return r.updateMuteErr
+	}
+	key := groupMemberKey{groupID: groupID, userID: userID}
+	member := r.members[key]
+	if mutedUntil == nil {
+		member.MutedUntil = nil
+	} else {
+		copy := *mutedUntil
+		member.MutedUntil = &copy
+	}
+	r.members[key] = member
 	return nil
 }
 

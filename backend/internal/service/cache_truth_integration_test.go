@@ -101,6 +101,17 @@ func TestCacheTruthDockerIntegration(t *testing.T) {
 		require.NoError(t, err)
 		require.True(t, present, "group rebuild must maintain user_groups reverse projection")
 	}
+	// Before GROUP-003 the loaded marker was the boolean string "1". A rolling
+	// upgrade must notice that it cannot describe this two-member projection and
+	// transparently rewrite it to the expected Set/Hash cardinality.
+	groupLoadedKey := fmt.Sprintf("group_member_loaded:%d", groupID)
+	require.NoError(t, redisClient.Set(ctx, groupLoadedKey, "1", 0).Err())
+	loaded, err := redisRepo.GroupMembersLoaded(ctx, groupID)
+	require.NoError(t, err)
+	require.False(t, loaded)
+	require.NoError(t, cacheTruth.EnsureGroupAccess(ctx, groupID))
+	require.Equal(t, "2", redisClient.Get(ctx, groupLoadedKey).Val())
+
 	// The Set and Hash are both required by group-message authorization. Audit
 	// must detect either half disappearing even when the union of IDs still
 	// happens to match MySQL.
@@ -109,13 +120,16 @@ func TestCacheTruthDockerIntegration(t *testing.T) {
 	require.NoError(t, err)
 	require.NotNil(t, issue)
 	require.Equal(t, []int64{userB}, issue.MissingInfoIDs)
-	require.NoError(t, cacheTruth.ReconcileNow(ctx, repository.CacheResourceGroupMembers, groupID))
+	require.NoError(t, cacheTruth.EnsureGroupAccess(ctx, groupID), "missing Hash metadata must invalidate the cardinality marker and reload MySQL")
+	restoredInfo, err := redisClient.HExists(ctx, fmt.Sprintf("group_member_info:%d", groupID), fmt.Sprint(userB)).Result()
+	require.NoError(t, err)
+	require.True(t, restoredInfo)
 	require.NoError(t, redisClient.SRem(ctx, fmt.Sprintf("group_members:%d", groupID), userB).Err())
 	issue, err = cacheTruth.auditGroup(ctx, groupID)
 	require.NoError(t, err)
 	require.NotNil(t, issue)
 	require.Equal(t, []int64{userB}, issue.MissingSetIDs)
-	require.NoError(t, cacheTruth.ReconcileNow(ctx, repository.CacheResourceGroupMembers, groupID))
+	require.NoError(t, cacheTruth.EnsureGroupAccess(ctx, groupID), "missing Set membership must invalidate the cardinality marker and reload MySQL")
 
 	require.NoError(t, redisClient.SAdd(ctx, fmt.Sprintf("user_groups:%d", extraReverseUserID), groupID).Err())
 	require.NoError(t, redisClient.SAdd(ctx, fmt.Sprintf("group_reverse_owner_index:%d", groupID), extraReverseUserID).Err())

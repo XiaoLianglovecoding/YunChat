@@ -343,8 +343,8 @@ group_member_loaded:{gid}
 
 含义是：
 
-- marker 不存在：不知道，必须回源 MySQL。
-- marker 存在、集合为空：已经确认，业务事实就是空。
+- 好友/黑名单 marker 不存在：不知道，必须回源 MySQL；存在则表示已加载，集合为空也是有效真相。
+- 群成员 marker 保存预期成员数；只有 `SCARD(group_members)` 和 `HLEN(group_member_info)` 都等于它，才算完整加载。
 
 即使用户没有任何好友，也会写 `friend_loaded:{uid}=1`。否则每次消息都会反复查询 MySQL，形成缓存穿透。
 
@@ -477,9 +477,11 @@ friend:A:*
 - `group_member_info:{gid}` 角色/禁言 Hash。
 - `user_groups:{uid}` 用户到群的反向 Set。
 - `group_reverse_owner_index:{gid}` 记录需要清理/重写反向 Set 的 owner。
-- `group_member_loaded:{gid}` marker。
+- `group_member_loaded:{gid}` 预期成员数 marker。
 
 禁言不缓存一个永久的 `muted=true`，而是缓存 Unix 毫秒 `muted_until`。群消息 Lua 用 Redis `TIME` 比较截止时间，到期后同一份缓存会自动允许发言。
+
+`EnsureGroupAccess` 会用预期成员数同时校验 Set 与 Hash。这样即使 Redis 只丢了 `group_member_info`、marker 仍在，也会先回源 MySQL；若元数据恰好在校验之后、消息 Lua 之前消失，Lua 仍会安全拒绝，而不会把“资料未知”误判成“未禁言”。
 
 巡检不仅比较成员 ID，还分别检查 Set 成员和 Hash field，再比较角色、禁言截止时间以及反向 `user_groups`。这能发现“Hash 还在但 Set 丢了，Lua 把真实成员误判为非成员”的局部损坏。
 

@@ -1,9 +1,9 @@
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
-import { fireEvent, render, screen, waitFor, within } from "@testing-library/react";
+import { act, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { Friendship, Group, Page, GroupMember } from "../../goim-api-types";
 import { ApiError } from "../api/client";
-import { canRemoveGroupMember, GroupManagementDrawer } from "../features/groups/GroupManagement";
+import { canMuteGroupMember, canRemoveGroupMember, canUpdateGroupMemberRole, describeGroupMemberMute, GroupManagementDrawer, isGroupMemberMuted } from "../features/groups/GroupManagement";
 import { friendsApi, groupsApi } from "../lib/api";
 import { useAuthStore } from "../stores/authStore";
 import { useChatStore } from "../stores/chatStore";
@@ -62,7 +62,10 @@ function renderManagement() {
 }
 
 describe("group profile management", () => {
-  afterEach(() => vi.restoreAllMocks());
+  afterEach(() => {
+    vi.useRealTimers();
+    vi.restoreAllMocks();
+  });
 
   beforeEach(() => {
     useAuthStore.setState({
@@ -124,6 +127,35 @@ describe("group profile management", () => {
     expect(canRemoveGroupMember(group, admin, 2, owner)).toBe(false);
     expect(canRemoveGroupMember(group, admin, 2, admin)).toBe(false);
     expect(canRemoveGroupMember(group, ordinary, 4, admin)).toBe(false);
+  });
+
+  it("applies the role and mute permission matrix using the real group owner", () => {
+    const owner = member(1, 2);
+    const admin = member(2, 1);
+    const peerAdmin = member(3, 1);
+    const ordinary = member(4, 0);
+
+    expect(canUpdateGroupMemberRole(group, 1, admin)).toBe(true);
+    expect(canUpdateGroupMemberRole(group, 1, ordinary)).toBe(true);
+    expect(canUpdateGroupMemberRole(group, 1, owner)).toBe(false);
+    expect(canUpdateGroupMemberRole(group, 2, ordinary)).toBe(false);
+
+    expect(canMuteGroupMember(group, owner, 1, admin)).toBe(true);
+    expect(canMuteGroupMember(group, owner, 1, ordinary)).toBe(true);
+    expect(canMuteGroupMember(group, owner, 1, owner)).toBe(false);
+    expect(canMuteGroupMember(group, admin, 2, ordinary)).toBe(true);
+    expect(canMuteGroupMember(group, admin, 2, peerAdmin)).toBe(false);
+    expect(canMuteGroupMember(group, admin, 2, owner)).toBe(false);
+    expect(canMuteGroupMember(group, ordinary, 4, ordinary)).toBe(false);
+  });
+
+  it("recognizes active and expired mute deadlines", () => {
+    const muted = { ...member(4, 0), muted_until: "2026-08-31T13:00:00Z" };
+
+    expect(isGroupMemberMuted(muted, Date.parse("2026-08-31T12:00:00Z"))).toBe(true);
+    expect(isGroupMemberMuted(muted, Date.parse("2026-08-31T13:00:00Z"))).toBe(false);
+    expect(describeGroupMemberMute(muted, Date.parse("2026-08-31T12:00:00Z"))).toContain("禁言至");
+    expect(describeGroupMemberMute(muted, Date.parse("2026-08-31T14:00:00Z"))).toContain("到期");
   });
 
   it("collects all member pages, displays the total, and excludes every existing member from invitations", async () => {
@@ -231,5 +263,125 @@ describe("group profile management", () => {
 
     await waitFor(() => expect(remove).toHaveBeenCalledWith(22, 2));
     await waitFor(() => expect(screen.queryByRole("alertdialog")).not.toBeInTheDocument());
+  });
+
+  it("lets only the real owner promote an ordinary member", async () => {
+    vi.spyOn(groupsApi, "get").mockResolvedValue(group);
+    vi.spyOn(groupsApi, "members").mockResolvedValue(page([member(1, 2, "群主"), member(3, 0, "待提升成员")], 2));
+    vi.spyOn(friendsApi, "list").mockResolvedValue({
+      items: [],
+      pagination: { total: 0, offset: 0, limit: 100, has_more: false },
+    });
+    const updateRole = vi.spyOn(groupsApi, "updateRole").mockResolvedValue(undefined);
+
+    renderManagement();
+    fireEvent.click(await screen.findByRole("button", { name: "设为管理员" }));
+    expect(updateRole).not.toHaveBeenCalled();
+    const dialog = await screen.findByRole("alertdialog");
+    fireEvent.click(within(dialog).getByRole("button", { name: "设为管理员" }));
+
+    await waitFor(() => expect(updateRole).toHaveBeenCalledWith(22, 3, { role: 1 }));
+  });
+
+  it("automatically changes an active mute to expired while the drawer stays open", async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date("2026-08-31T12:00:00Z"));
+    const mutedMember = { ...member(3, 0, "即将解禁成员"), muted_until: "2026-08-31T12:00:01Z" };
+    const client = new QueryClient({ defaultOptions: { queries: { retry: false, staleTime: Infinity }, mutations: { retry: false } } });
+    client.setQueryData(["group", 22], group);
+    client.setQueryData(["group-members", 22], { items: [member(1, 2, "群主"), mutedMember], total: 2 });
+    client.setQueryData(["friends"], { items: [], pagination: { total: 0, offset: 0, limit: 100, has_more: false } });
+    const conversation = useChatStore.getState().conversations[0];
+
+    render(
+      <QueryClientProvider client={client}>
+        <GroupManagementDrawer conversation={conversation} onClose={() => undefined} open />
+      </QueryClientProvider>,
+    );
+    expect(screen.getByRole("button", { name: "解除禁言" })).toBeInTheDocument();
+
+    await act(async () => { vi.advanceTimersByTime(1_100); });
+
+    expect(screen.getByRole("button", { name: "禁言成员" })).toBeInTheDocument();
+    expect(screen.getByText(/禁言已于.*到期/)).toBeInTheDocument();
+  });
+
+  it("lets the owner choose a mute duration and refreshes the member cache", async () => {
+    vi.spyOn(Date, "now").mockReturnValue(Date.parse("2026-08-31T12:00:00Z"));
+    vi.spyOn(groupsApi, "get").mockResolvedValue(group);
+    vi.spyOn(groupsApi, "members").mockResolvedValue(page([member(1, 2, "群主"), member(3, 0, "需要安静一下")], 2));
+    vi.spyOn(friendsApi, "list").mockResolvedValue({
+      items: [],
+      pagination: { total: 0, offset: 0, limit: 100, has_more: false },
+    });
+    let resolveMute!: () => void;
+    const mute = vi.spyOn(groupsApi, "muteMember").mockImplementation(() => new Promise<void>((resolve) => { resolveMute = resolve; }));
+    const client = renderManagement();
+    const invalidate = vi.spyOn(client, "invalidateQueries");
+
+    fireEvent.click(await screen.findByRole("button", { name: "禁言成员" }));
+    const durationPanel = screen.getByRole("group", { name: "选择禁言时长" });
+    const oneHour = within(durationPanel).getByRole("button", { name: "1 小时" });
+    fireEvent.click(oneHour);
+
+    await waitFor(() => expect(mute).toHaveBeenCalledWith(22, 3, { muted_until: "2026-08-31T13:00:00.000Z" }));
+    expect(oneHour).toBeDisabled();
+    resolveMute();
+    await waitFor(() => expect(invalidate).toHaveBeenCalledWith({ queryKey: ["group-members", 22] }));
+    await waitFor(() => expect(screen.queryByRole("group", { name: "选择禁言时长" })).not.toBeInTheDocument());
+  });
+
+  it("displays muted_until and lets the owner unmute a member", async () => {
+    const mutedMember = { ...member(3, 0, "被禁言成员"), muted_until: "2099-08-31T13:00:00Z" };
+    vi.spyOn(groupsApi, "get").mockResolvedValue(group);
+    vi.spyOn(groupsApi, "members").mockResolvedValue(page([member(1, 2, "群主"), mutedMember], 2));
+    vi.spyOn(friendsApi, "list").mockResolvedValue({
+      items: [],
+      pagination: { total: 0, offset: 0, limit: 100, has_more: false },
+    });
+    const unmute = vi.spyOn(groupsApi, "unmuteMember").mockResolvedValue(undefined);
+
+    renderManagement();
+
+    expect(await screen.findByText(/禁言至/)).toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: "解除禁言" }));
+    await waitFor(() => expect(unmute).toHaveBeenCalledWith(22, 3));
+  });
+
+  it("only exposes ordinary-member mute controls to an administrator", async () => {
+    useAuthStore.setState({ user: { id: 2, username: "admin" } });
+    vi.spyOn(groupsApi, "get").mockResolvedValue(group);
+    vi.spyOn(groupsApi, "members").mockResolvedValue(page([
+      member(1, 2, "群主"),
+      member(2, 1, "当前管理员"),
+      member(3, 1, "同级管理员"),
+      member(4, 0, "普通成员"),
+    ], 4));
+    vi.spyOn(friendsApi, "list").mockResolvedValue({
+      items: [],
+      pagination: { total: 0, offset: 0, limit: 100, has_more: false },
+    });
+
+    renderManagement();
+
+    expect(await screen.findAllByRole("button", { name: "禁言成员" })).toHaveLength(1);
+    expect(screen.queryByRole("button", { name: "设为管理员" })).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "取消管理员" })).not.toBeInTheDocument();
+  });
+
+  it("maps a mute permission failure to a clear Chinese message", async () => {
+    vi.spyOn(groupsApi, "get").mockResolvedValue(group);
+    vi.spyOn(groupsApi, "members").mockResolvedValue(page([member(1, 2, "群主"), member(3, 0, "普通成员")], 2));
+    vi.spyOn(friendsApi, "list").mockResolvedValue({
+      items: [],
+      pagination: { total: 0, offset: 0, limit: 100, has_more: false },
+    });
+    vi.spyOn(groupsApi, "muteMember").mockRejectedValue(new ApiError("permission denied", 1301, 403));
+
+    renderManagement();
+    fireEvent.click(await screen.findByRole("button", { name: "禁言成员" }));
+    fireEvent.click(screen.getByRole("button", { name: "10 分钟" }));
+
+    expect(await screen.findByText("你无权操作该成员")).toBeInTheDocument();
   });
 });

@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"strings"
+	"time"
 	"unicode"
 	"unicode/utf8"
 
@@ -203,6 +204,155 @@ func (s *GroupServiceImpl) RemoveMember(ctx context.Context, groupID, operatorID
 	}
 	s.refreshGroupMemberCache(ctx, groupID)
 	return nil
+}
+
+// UpdateRole promotes an ordinary member to administrator or demotes an
+// administrator back to ordinary member. Only groups.owner_id is treated as
+// the real owner; a stray role=2 row never grants this authority.
+func (s *GroupServiceImpl) UpdateRole(ctx context.Context, groupID, operatorID, memberID int64, role int) error {
+	if groupID <= 0 || operatorID <= 0 || memberID <= 0 {
+		return apperror.New(apperror.CodeInvalidParam)
+	}
+	if role != model.GroupRoleMember && role != model.GroupRoleAdmin {
+		return apperror.New(apperror.CodeInvalidRole)
+	}
+
+	changed := false
+	err := s.repository.WithinGroupTransaction(ctx, func(txCtx context.Context, tx repository.GroupRepository) error {
+		group, err := tx.GetGroupForUpdate(txCtx, groupID)
+		if err != nil {
+			return err
+		}
+		if group == nil {
+			return apperror.New(apperror.CodeGroupNotFound)
+		}
+		operator, err := tx.GetGroupMemberForUpdate(txCtx, groupID, operatorID)
+		if err != nil {
+			return err
+		}
+		if operator == nil || group.OwnerID != operatorID {
+			return apperror.New(apperror.CodeNotOwnerOrAdmin)
+		}
+		target, err := tx.GetGroupMemberForUpdate(txCtx, groupID, memberID)
+		if err != nil {
+			return err
+		}
+		if target == nil {
+			return apperror.New(apperror.CodeGroupMemberNotFound)
+		}
+		if target.UserID == group.OwnerID {
+			return apperror.New(apperror.CodeNotOwnerOrAdmin)
+		}
+		// PUT describes the desired final state. Repeating the same command is a
+		// successful no-op and need not create another reconciliation event.
+		if target.Role == role {
+			return nil
+		}
+		if err := tx.UpdateGroupMemberRole(txCtx, groupID, memberID, role); err != nil {
+			return err
+		}
+		if err := tx.EnqueueCacheReconcile(txCtx, repository.CacheResourceGroupMembers, groupID); err != nil {
+			return err
+		}
+		changed = true
+		return nil
+	})
+	if err != nil {
+		return groupServiceError(err)
+	}
+	if changed {
+		s.refreshGroupMemberCache(ctx, groupID)
+	}
+	return nil
+}
+
+// MuteMember sets a future mute deadline. Passing nil clears the deadline and
+// therefore unmutes the member. Owners may manage administrators and members;
+// administrators may manage ordinary members only.
+func (s *GroupServiceImpl) MuteMember(ctx context.Context, groupID, operatorID, memberID int64, mutedUntil *time.Time) error {
+	if groupID <= 0 || operatorID <= 0 || memberID <= 0 {
+		return apperror.New(apperror.CodeInvalidParam)
+	}
+	deadline, err := normalizeGroupMuteDeadline(mutedUntil)
+	if err != nil {
+		return err
+	}
+
+	changed := false
+	err = s.repository.WithinGroupTransaction(ctx, func(txCtx context.Context, tx repository.GroupRepository) error {
+		group, err := tx.GetGroupForUpdate(txCtx, groupID)
+		if err != nil {
+			return err
+		}
+		if group == nil {
+			return apperror.New(apperror.CodeGroupNotFound)
+		}
+		operator, err := tx.GetGroupMemberForUpdate(txCtx, groupID, operatorID)
+		if err != nil {
+			return err
+		}
+		if !canManageGroupMembers(group, operator, operatorID) {
+			return apperror.New(apperror.CodeNotOwnerOrAdmin)
+		}
+		target, err := tx.GetGroupMemberForUpdate(txCtx, groupID, memberID)
+		if err != nil {
+			return err
+		}
+		if target == nil {
+			return apperror.New(apperror.CodeGroupMemberNotFound)
+		}
+		if target.UserID == group.OwnerID ||
+			(group.OwnerID != operatorID && target.Role != model.GroupRoleMember) {
+			return apperror.New(apperror.CodeNotOwnerOrAdmin)
+		}
+		// The request may have waited for a row lock. Recheck here so a deadline
+		// cannot already be expired by the time the transaction writes it.
+		if deadline != nil && !deadline.After(time.Now().UTC()) {
+			return apperror.WithMessage(apperror.CodeInvalidParam, "muted_until must be in the future")
+		}
+		// Mute and unmute are desired-state operations too, so an identical
+		// deadline (or clearing an already empty deadline) skips the write/event.
+		if sameOptionalGroupTime(target.MutedUntil, deadline) {
+			return nil
+		}
+		if err := tx.UpdateGroupMemberMute(txCtx, groupID, memberID, deadline); err != nil {
+			return err
+		}
+		if err := tx.EnqueueCacheReconcile(txCtx, repository.CacheResourceGroupMembers, groupID); err != nil {
+			return err
+		}
+		changed = true
+		return nil
+	})
+	if err != nil {
+		return groupServiceError(err)
+	}
+	if changed {
+		s.refreshGroupMemberCache(ctx, groupID)
+	}
+	return nil
+}
+
+func normalizeGroupMuteDeadline(deadline *time.Time) (*time.Time, error) {
+	if deadline == nil {
+		return nil, nil
+	}
+	// group_members.muted_until is a MySQL DATETIME without fractional seconds.
+	// Normalize to the column's precision before both validation and comparison,
+	// otherwise a browser's millisecond timestamp would never equal the stored
+	// value on an idempotent retry.
+	normalized := deadline.UTC().Truncate(time.Second)
+	if normalized.Year() < 1000 || normalized.Year() > 9999 || !normalized.After(time.Now().UTC()) {
+		return nil, apperror.WithMessage(apperror.CodeInvalidParam, "muted_until must be in the future")
+	}
+	return &normalized, nil
+}
+
+func sameOptionalGroupTime(first, second *time.Time) bool {
+	if first == nil || second == nil {
+		return first == nil && second == nil
+	}
+	return first.Equal(*second)
 }
 
 func (s *GroupServiceImpl) ListMembers(ctx context.Context, groupID, viewerID int64, limit, offset int) (Page[GroupMemberListItem], error) {

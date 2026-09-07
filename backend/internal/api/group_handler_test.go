@@ -25,6 +25,8 @@ type groupServiceStub struct {
 	addMember    func(context.Context, int64, int64, int64) error
 	removeMember func(context.Context, int64, int64, int64) error
 	listMembers  func(context.Context, int64, int64, int, int) (service.Page[service.GroupMemberListItem], error)
+	updateRole   func(context.Context, int64, int64, int64, int) error
+	muteMember   func(context.Context, int64, int64, int64, *time.Time) error
 }
 
 func (s groupServiceStub) Create(ctx context.Context, ownerID int64, name, notice string) (int64, error) {
@@ -53,6 +55,14 @@ func (s groupServiceStub) RemoveMember(ctx context.Context, groupID, operatorID,
 
 func (s groupServiceStub) ListMembers(ctx context.Context, groupID, viewerID int64, limit, offset int) (service.Page[service.GroupMemberListItem], error) {
 	return s.listMembers(ctx, groupID, viewerID, limit, offset)
+}
+
+func (s groupServiceStub) UpdateRole(ctx context.Context, groupID, operatorID, memberID int64, role int) error {
+	return s.updateRole(ctx, groupID, operatorID, memberID, role)
+}
+
+func (s groupServiceStub) MuteMember(ctx context.Context, groupID, operatorID, memberID int64, mutedUntil *time.Time) error {
+	return s.muteMember(ctx, groupID, operatorID, memberID, mutedUntil)
 }
 
 func TestGroupCreateReturnsCreatedGroupID(t *testing.T) {
@@ -482,6 +492,8 @@ func completeGroupStub() groupServiceStub {
 		listMembers: func(context.Context, int64, int64, int, int) (service.Page[service.GroupMemberListItem], error) {
 			return service.Page[service.GroupMemberListItem]{Items: make([]service.GroupMemberListItem, 0)}, nil
 		},
+		updateRole: func(context.Context, int64, int64, int64, int) error { return nil },
+		muteMember: func(context.Context, int64, int64, int64, *time.Time) error { return nil },
 	}
 }
 

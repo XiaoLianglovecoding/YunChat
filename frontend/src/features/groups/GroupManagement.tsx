@@ -1,5 +1,5 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { Crown, LogOut, ShieldCheck, UserPlus, Users, X } from "lucide-react";
+import { Crown, LogOut, ShieldCheck, UserPlus, Users, Volume2, VolumeX, X } from "lucide-react";
 import { useEffect, useMemo, useRef, useState } from "react";
 import type { Group, GroupMember } from "../../../goim-api-types";
 import { ApiError } from "../../api/client";
@@ -20,13 +20,21 @@ const previewMembers: GroupMember[] = [
 
 const roleNames = { 0: "成员", 1: "管理员", 2: "群主" } as const;
 
+const muteDurations = [
+  { label: "10 分钟", minutes: 10 },
+  { label: "1 小时", minutes: 60 },
+  { label: "24 小时", minutes: 24 * 60 },
+] as const;
+
 const groupErrorMessages: Partial<Record<number, string>> = {
+  1002: "提交的数据不合法，请检查后重试",
   1104: "这位用户不存在或已注销",
-  1301: "你没有管理群成员的权限",
+  1301: "你无权操作该成员",
   1302: "这个群聊不存在或已被解散",
   1303: "这位好友已经是群成员",
   1304: "群成员已达上限",
   1305: "不能移除群主，请先转让群主身份",
+  1307: "成员角色只能是普通成员或管理员",
   1308: "只能邀请你的好友加入群聊",
   1309: "管理员不能移除同级管理员",
   1310: "这位用户已经不在群聊中",
@@ -47,6 +55,36 @@ export function canRemoveGroupMember(group: Group | undefined, currentMember: Gr
   if (!group || target.user_id === currentUserId || target.user_id === group.owner_id) return false;
   if (group.owner_id === currentUserId) return true;
   return currentMember?.role === 1 && target.role === 0;
+}
+
+export function canUpdateGroupMemberRole(group: Group | undefined, currentUserId: number, target: GroupMember) {
+  return Boolean(group && group.owner_id === currentUserId && target.user_id !== group.owner_id && target.role !== 2);
+}
+
+export function canMuteGroupMember(group: Group | undefined, currentMember: GroupMember | undefined, currentUserId: number, target: GroupMember) {
+  if (!group || target.user_id === currentUserId || target.user_id === group.owner_id) return false;
+  if (group.owner_id === currentUserId) return target.role === 0 || target.role === 1;
+  return currentMember?.role === 1 && target.role === 0;
+}
+
+export function isGroupMemberMuted(member: GroupMember, now = Date.now()) {
+  if (!member.muted_until) return false;
+  const deadline = Date.parse(member.muted_until);
+  return Number.isFinite(deadline) && deadline > now;
+}
+
+export function describeGroupMemberMute(member: GroupMember, now = Date.now()) {
+  if (!member.muted_until) return null;
+  const deadline = Date.parse(member.muted_until);
+  if (!Number.isFinite(deadline)) return "禁言时间异常";
+  const formatted = new Intl.DateTimeFormat("zh-CN", {
+    month: "2-digit",
+    day: "2-digit",
+    hour: "2-digit",
+    minute: "2-digit",
+    hour12: false,
+  }).format(deadline);
+  return deadline > now ? `禁言至 ${formatted}` : `禁言已于 ${formatted} 到期`;
 }
 
 interface CreateGroupDrawerProps {
@@ -98,9 +136,11 @@ export function GroupManagementDrawer({ conversation, open, onClose }: GroupMana
   const [editing, setEditing] = useState(false);
   const [name, setName] = useState(conversation.name);
   const [notice, setNotice] = useState(localGroup.notice);
-  const [danger, setDanger] = useState<{ type: "remove" | "leave" | "transfer"; memberId?: number } | null>(null);
+  const [danger, setDanger] = useState<{ type: "remove" | "leave" | "transfer" | "role"; memberId?: number; nextRole?: 0 | 1 } | null>(null);
+  const [muteTargetId, setMuteTargetId] = useState<number | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [muteSaving, setMuteSaving] = useState(false);
+  const [clockNow, setClockNow] = useState(() => Date.now());
   const actionRunningRef = useRef(false);
   const groupQuery = useQuery({ queryKey: ["group", groupId], queryFn: () => groupsApi.get(groupId), enabled: open && !previewMode });
   const membersQuery = useQuery({ queryKey: groupMembersQueryKey(groupId), queryFn: () => fetchAllGroupMembers(groupId), enabled: open && !previewMode });
@@ -115,6 +155,24 @@ export function GroupManagementDrawer({ conversation, open, onClose }: GroupMana
   const isFull = memberTotal !== undefined && memberTotal >= (group?.max_members ?? 500);
   const friendsQuery = useQuery({ queryKey: ["friends"], queryFn: () => friendsApi.list(100, 0), enabled: open && !previewMode && canManage });
 
+  const nearestActiveMuteDeadline = useMemo(() => members.reduce<number | null>((nearest, member) => {
+    if (!member.muted_until) return nearest;
+    const deadline = Date.parse(member.muted_until);
+    if (!Number.isFinite(deadline) || deadline <= clockNow) return nearest;
+    return nearest === null || deadline < nearest ? deadline : nearest;
+  }, null), [clockNow, members]);
+
+  useEffect(() => {
+    if (open) setClockNow(Date.now());
+  }, [open]);
+
+  useEffect(() => {
+    if (!open || nearestActiveMuteDeadline === null) return;
+    const delay = Math.min(Math.max(nearestActiveMuteDeadline - Date.now() + 50, 0), 2_147_483_647);
+    const timer = window.setTimeout(() => setClockNow(Date.now()), delay);
+    return () => window.clearTimeout(timer);
+  }, [clockNow, nearestActiveMuteDeadline, open]);
+
   useEffect(() => {
     if (!groupQuery.data) return;
     setName(groupQuery.data.name); setNotice(groupQuery.data.notice);
@@ -126,7 +184,8 @@ export function GroupManagementDrawer({ conversation, open, onClose }: GroupMana
     setError(null);
     try { previewMode ? previewAction() : await actionMutation.mutateAsync(liveAction); return true; }
     catch (failure) {
-      if (failure instanceof ApiError && (failure.code === 1303 || failure.code === 1310)) {
+      if (failure instanceof ApiError && (failure.code === 1301 || failure.code === 1303 || failure.code === 1310)) {
+        void queryClient.invalidateQueries({ queryKey: ["group", groupId] });
         void queryClient.invalidateQueries({ queryKey: groupMembersQueryKey(groupId) });
       }
       setError(groupErrorMessage(failure, "操作失败，请稍后重试"));
@@ -165,22 +224,43 @@ export function GroupManagementDrawer({ conversation, open, onClose }: GroupMana
     }
   };
   const addMember = (memberId: number, username: string, avatarUrl?: string) => { void run(() => setLocalMembers((current) => [...current, { id: Date.now(), group_id: groupId, user_id: memberId, role: 0, username, avatar_url: avatarUrl, joined_at: new Date().toISOString() }]), () => groupsApi.addMember(groupId, { member_id: memberId })); };
-  const updateRole = (member: GroupMember) => void run(() => setLocalMembers((current) => current.map((item) => item.user_id === member.user_id ? { ...item, role: member.role === 1 ? 0 : 1 } : item)), () => groupsApi.updateRole(groupId, member.user_id, { role: member.role === 1 ? 0 : 1 }));
+  const updateRole = (memberId: number, role: 0 | 1) => run(
+    () => setLocalMembers((current) => current.map((item) => item.user_id === memberId ? { ...item, role } : item)),
+    () => groupsApi.updateRole(groupId, memberId, { role }),
+  );
+  const muteMember = (member: GroupMember, minutes: number) => {
+    const mutedUntil = new Date(Date.now() + minutes * 60_000).toISOString();
+    void run(
+      () => setLocalMembers((current) => current.map((item) => item.user_id === member.user_id ? { ...item, muted_until: mutedUntil } : item)),
+      () => groupsApi.muteMember(groupId, member.user_id, { muted_until: mutedUntil }),
+    ).then((succeeded) => { if (succeeded) setMuteTargetId(null); });
+  };
+  const unmuteMember = (member: GroupMember) => {
+    void run(
+      () => setLocalMembers((current) => current.map((item) => item.user_id === member.user_id ? { ...item, muted_until: null } : item)),
+      () => groupsApi.unmuteMember(groupId, member.user_id),
+    );
+  };
   const confirmDanger = async () => {
     if (!danger) return;
     let succeeded = false;
     if (danger.type === "remove" && danger.memberId) succeeded = await run(() => setLocalMembers((current) => current.filter((member) => member.user_id !== danger.memberId)), () => groupsApi.removeMember(groupId, danger.memberId!));
     if (danger.type === "leave") succeeded = await run(() => undefined, () => groupsApi.leave(groupId));
     if (danger.type === "transfer" && danger.memberId) succeeded = await run(() => undefined, () => groupsApi.transferOwner(groupId, { new_owner_id: danger.memberId! }));
+    if (danger.type === "role" && danger.memberId && danger.nextRole !== undefined) succeeded = await updateRole(danger.memberId, danger.nextRole);
     if (!succeeded) return;
     setDanger(null);
     if (danger.type === "leave") { removeConversation(conversation.id); onClose(); }
   };
 
   const sortedMembers = useMemo(() => [...members].sort((a, b) => b.role - a.role), [members]);
+  const muteTarget = members.find((member) => member.user_id === muteTargetId);
   const memberIds = useMemo(() => new Set(members.map((member) => member.user_id)), [members]);
   const inviteCandidates = (friendsQuery.data?.items ?? []).filter((friend) => !memberIds.has(friend.friend_id) && !friend.is_blocked);
   const memberSummary = memberTotal !== undefined ? `${memberTotal} 位成员` : membersQuery.isError ? "成员加载失败" : "成员加载中";
+  const confirmationLabel = danger?.type === "leave" ? "退出群聊" : danger?.type === "transfer" ? "转让群主" : danger?.type === "role" ? (danger.nextRole === 1 ? "设为管理员" : "取消管理员") : "移除成员";
+  const confirmationDescription = danger?.type === "leave" ? "退出后将不再接收这个群的消息。" : danger?.type === "transfer" ? `转让后，用户 #${danger.memberId ?? ""} 将成为新群主，你将变为普通成员。` : danger?.type === "role" ? (danger.nextRole === 1 ? `用户 #${danger.memberId ?? ""} 将获得群管理权限。` : `用户 #${danger.memberId ?? ""} 将失去群管理权限。`) : `确认将用户 #${danger?.memberId ?? ""} 移出群聊？`;
+  const confirmationTitle = danger?.type === "leave" ? "确定退出群聊？" : danger?.type === "transfer" ? "转让群主？" : danger?.type === "role" ? (danger.nextRole === 1 ? "设为管理员？" : "取消管理员？") : "移除这位成员？";
 
   return (
     <>
@@ -207,17 +287,39 @@ export function GroupManagementDrawer({ conversation, open, onClose }: GroupMana
 
         <section className="group-members">
           <header><h3><Users size={16} />群成员</h3><span>{memberTotal ?? "—"}</span></header>
+          {muteTarget && canMuteGroupMember(group, currentMember, currentUserId, muteTarget) && (
+            <div aria-label="选择禁言时长" className="group-mute-panel" role="group">
+              <header>
+                <span><strong>禁言 {muteTarget.username || `用户 #${muteTarget.user_id}`}</strong><small>到期后会自动恢复发言</small></span>
+                <IconButton disabled={actionMutation.isPending} label="取消禁言设置" onClick={() => setMuteTargetId(null)}><X size={14} /></IconButton>
+              </header>
+              <div>
+                {muteDurations.map((duration) => (
+                  <Button disabled={actionMutation.isPending} key={duration.minutes} onClick={() => muteMember(muteTarget, duration.minutes)} size="sm" variant="secondary">
+                    {duration.label}
+                  </Button>
+                ))}
+              </div>
+            </div>
+          )}
           {!previewMode && membersQuery.isLoading && <div className="group-query-state"><p>正在加载群成员…</p></div>}
           {!previewMode && membersQuery.isError && <div className="group-query-state"><p>{groupErrorMessage(membersQuery.error, "加载群成员失败")}</p><Button onClick={() => void membersQuery.refetch()} size="sm" variant="secondary">重试</Button></div>}
           {!membersQuery.isLoading && !membersQuery.isError && sortedMembers.length === 0 && <div className="group-query-state"><p>暂无群成员</p></div>}
           {sortedMembers.map((member) => (
             <div className="group-member-row" key={member.user_id}>
               <Avatar name={member.username || `用户 ${member.user_id}`} size="sm" src={member.avatar_url} />
-              <div className="group-member-copy"><strong>{member.user_id === currentUserId ? `${member.username || "我"}（我）` : member.username || `用户 #${member.user_id}`}</strong><small>用户 #{member.user_id} · {roleNames[member.role]}</small></div>
+              <div className="group-member-copy">
+                <strong>{member.user_id === currentUserId ? `${member.username || "我"}（我）` : member.username || `用户 #${member.user_id}`}</strong>
+                <small>用户 #{member.user_id} · {roleNames[member.role]}</small>
+                {describeGroupMemberMute(member, clockNow) && <small className={isGroupMemberMuted(member, clockNow) ? "is-muted" : undefined}><VolumeX size={10} />{describeGroupMemberMute(member, clockNow)}</small>}
+              </div>
               <span className={`role-badge role-badge--${member.role}`}>{member.role === 2 ? <Crown size={11} /> : member.role === 1 ? <ShieldCheck size={11} /> : null}{roleNames[member.role]}</span>
               <div className="group-member-actions">
-                {isOwner && member.role !== 2 && <IconButton disabled={actionMutation.isPending} label={member.role === 1 ? "取消管理员" : "设为管理员"} onClick={() => updateRole(member)}><ShieldCheck size={15} /></IconButton>}
+                {canUpdateGroupMemberRole(group, currentUserId, member) && <IconButton disabled={actionMutation.isPending} label={member.role === 1 ? "取消管理员" : "设为管理员"} onClick={() => setDanger({ type: "role", memberId: member.user_id, nextRole: member.role === 1 ? 0 : 1 })}><ShieldCheck size={15} /></IconButton>}
                 {isOwner && member.role !== 2 && <IconButton disabled={actionMutation.isPending} label="转让群主" onClick={() => setDanger({ type: "transfer", memberId: member.user_id })}><Crown size={15} /></IconButton>}
+                {canMuteGroupMember(group, currentMember, currentUserId, member) && (isGroupMemberMuted(member, clockNow)
+                  ? <IconButton disabled={actionMutation.isPending} label="解除禁言" onClick={() => unmuteMember(member)} selected><Volume2 size={15} /></IconButton>
+                  : <IconButton disabled={actionMutation.isPending} label="禁言成员" onClick={() => setMuteTargetId(member.user_id)}><VolumeX size={15} /></IconButton>)}
                 {canRemoveGroupMember(group, currentMember, currentUserId, member) && <IconButton disabled={actionMutation.isPending} label="移除成员" onClick={() => setDanger({ type: "remove", memberId: member.user_id })}><X size={15} /></IconButton>}
               </div>
             </div>
@@ -225,7 +327,7 @@ export function GroupManagementDrawer({ conversation, open, onClose }: GroupMana
         </section>
         <Button disabled={isOwner || actionMutation.isPending || !currentMember} leadingIcon={<LogOut size={15} />} onClick={() => setDanger({ type: "leave" })} variant="danger">{isOwner ? "群主需先转让身份才能退出" : "退出群聊"}</Button>
       </Drawer>
-      <ConfirmDialog confirmLabel={danger?.type === "leave" ? "退出群聊" : danger?.type === "transfer" ? "转让群主" : "移除成员"} confirming={actionMutation.isPending} description={danger?.type === "leave" ? "退出后将不再接收这个群的消息。" : danger?.type === "transfer" ? `转让后，用户 #${danger.memberId ?? ""} 将成为新群主，你将变为普通成员。` : `确认将用户 #${danger?.memberId ?? ""} 移出群聊？`} destructive={danger?.type !== "transfer"} onClose={() => { if (!actionMutation.isPending) setDanger(null); }} onConfirm={() => void confirmDanger()} open={Boolean(danger)} title={danger?.type === "leave" ? "确定退出群聊？" : danger?.type === "transfer" ? "转让群主？" : "移除这位成员？"} />
+      <ConfirmDialog confirmLabel={confirmationLabel} confirming={actionMutation.isPending} description={confirmationDescription} destructive={danger?.type === "leave" || danger?.type === "remove"} onClose={() => { if (!actionMutation.isPending) setDanger(null); }} onConfirm={() => void confirmDanger()} open={Boolean(danger)} title={confirmationTitle} />
     </>
   );
 }

@@ -131,7 +131,8 @@ func TestGroupMembersDockerIntegration(t *testing.T) {
 	requireGroupMembersITProjection(t, ctx, redisClient, groupID, adminID, model.GroupRoleMember, true)
 	requireGroupMembersITCode(t, groups.AddMember(ctx, groupID, ownerID, adminID), apperror.CodeAlreadyMember)
 
-	// GROUP-003 is not implemented yet, so seed the administrator role directly
+	// This GROUP-002 integration test seeds the administrator role directly so
+	// it stays focused on member removal instead of depending on another use case.
 	// and rebuild the complete projection before exercising the GROUP-002 matrix.
 	_, err = db.ExecContext(ctx, `UPDATE group_members SET role = ? WHERE group_id = ? AND user_id = ?`,
 		model.GroupRoleAdmin, groupID, adminID)

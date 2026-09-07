@@ -34,6 +34,7 @@ export interface CreateGroupResponse { group_id: ApiId; }
 export interface UpdateGroupRequest { name: string; notice: string; }
 export interface AddGroupMemberRequest { member_id: ApiId; }
 export interface UpdateGroupMemberRoleRequest { role: 0 | 1; }
+export interface MuteGroupMemberRequest { muted_until: IsoDateTime; }
 export interface TransferGroupOwnerRequest { new_owner_id: ApiId; }
 export interface PublishMomentRequest { content: string; media_urls?: string; visibility: 2 | 3; }
 export interface PublishMomentResponse { moment_id: ApiId; }

@@ -16,7 +16,7 @@
 | 移除成员 | `DELETE /api/v1/group/:groupID/member/:memberID` | 路径中的成员用户 ID | HTTP 200，省略 `data` |
 | 成员列表 | `GET /api/v1/group/:groupID/members` | `limit=20&offset=0` | 分页成员资料 |
 
-角色修改与禁言仍属于 `GROUP-003`，退群和转让群主仍属于 `GROUP-004`。本阶段不会提前混入这些规则。
+角色修改与禁言后来已经在 `GROUP-003` 完成，详见 [GROUP_ROLE_MUTE_TUTORIAL.md](GROUP_ROLE_MUTE_TUTORIAL.md)；退群和转让群主仍属于 `GROUP-004`。本篇继续只讲 GROUP-002 的边界。
 
 ## 1. 先把数据关系想清楚
 
@@ -312,7 +312,7 @@ Handler 不直接 COUNT、不查好友，也不写 Redis。
 
 [group_repository.go](../backend/internal/repository/group_repository.go) 负责事务绑定、`FOR UPDATE`、COUNT、JOIN 分页和成员 DELETE。Service 只依赖窄接口，因此单元测试能用内存 fake，不需要每次都启动 MySQL。
 
-已完成的资料与成员能力组合成 `GroupCoreService`；尚未完成的角色、转让与退群仍留在更大的 `GroupService` 契约中。这是接口隔离：Router 只要求当前真实可用的能力。
+已完成的资料、成员与 GROUP-003 角色/禁言能力组合成 `GroupCoreService`；尚未完成的转让与退群仍留在更大的 `GroupService` 契约中。这是接口隔离：Router 只要求当前真实可用的能力。
 
 ## 10. 业务错误码速查
 
@@ -337,7 +337,7 @@ Handler 不直接 COUNT、不查好友，也不写 Redis。
 准备两个已经互为好友的账号。先用群主 token：
 
 ```powershell
-$base = 'http://localhost:8080/api/v1'
+$base = 'http://localhost:18080/api/v1'
 $ownerToken = '群主的 access_token'
 $ownerHeaders = @{ Authorization = "Bearer $ownerToken" }
 $groupID = 100

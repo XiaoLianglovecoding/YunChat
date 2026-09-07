@@ -147,6 +147,76 @@ func (h *GroupHandler) ListMembers(c *gin.Context) {
 	WriteSuccess(c, http.StatusOK, pageResponse(page))
 }
 
+func (h *GroupHandler) UpdateMemberRole(c *gin.Context) {
+	userID, ok := currentUserID(c)
+	if !ok {
+		return
+	}
+	groupID, ok := groupIDParam(c)
+	if !ok {
+		return
+	}
+	memberID, ok := positivePathID(c, "memberID")
+	if !ok {
+		return
+	}
+	var request UpdateGroupMemberRoleRequest
+	if err := c.ShouldBindJSON(&request); err != nil || request.Role == nil {
+		WriteError(c, apperror.New(apperror.CodeInvalidParam))
+		return
+	}
+	if err := h.groups.UpdateRole(c.Request.Context(), groupID, userID, memberID, *request.Role); err != nil {
+		WriteError(c, err)
+		return
+	}
+	WriteSuccess(c, http.StatusOK, nil)
+}
+
+func (h *GroupHandler) MuteMember(c *gin.Context) {
+	userID, ok := currentUserID(c)
+	if !ok {
+		return
+	}
+	groupID, ok := groupIDParam(c)
+	if !ok {
+		return
+	}
+	memberID, ok := positivePathID(c, "memberID")
+	if !ok {
+		return
+	}
+	var request MuteGroupMemberRequest
+	if err := c.ShouldBindJSON(&request); err != nil || request.MutedUntil == nil {
+		WriteError(c, apperror.New(apperror.CodeInvalidParam))
+		return
+	}
+	if err := h.groups.MuteMember(c.Request.Context(), groupID, userID, memberID, request.MutedUntil); err != nil {
+		WriteError(c, err)
+		return
+	}
+	WriteSuccess(c, http.StatusOK, nil)
+}
+
+func (h *GroupHandler) UnmuteMember(c *gin.Context) {
+	userID, ok := currentUserID(c)
+	if !ok {
+		return
+	}
+	groupID, ok := groupIDParam(c)
+	if !ok {
+		return
+	}
+	memberID, ok := positivePathID(c, "memberID")
+	if !ok {
+		return
+	}
+	if err := h.groups.MuteMember(c.Request.Context(), groupID, userID, memberID, nil); err != nil {
+		WriteError(c, err)
+		return
+	}
+	WriteSuccess(c, http.StatusOK, nil)
+}
+
 func groupIDParam(c *gin.Context) (int64, bool) {
 	return positivePathID(c, "groupID")
 }

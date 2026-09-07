@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"sort"
+	"time"
 
 	"my-im/internal/model"
 )
@@ -28,9 +29,21 @@ type GroupRepository interface {
 	IsFriendPair(context.Context, int64, int64) (bool, error)
 	CountGroupMembers(context.Context, int64) (int64, error)
 	RemoveGroupMember(context.Context, int64, int64) error
+	UpdateGroupMemberRole(context.Context, int64, int64, int) error
+	UpdateGroupMemberMute(context.Context, int64, int64, *time.Time) error
 	ListGroupMembersPage(context.Context, int64, int, int) ([]GroupMemberProfile, error)
 	ListGroupsByUser(context.Context, int64) ([]model.Group, error)
 	UpdateGroupProfile(context.Context, int64, string, string) error
+}
+
+func (m *MySQLRepoImpl) UpdateGroupMemberMute(ctx context.Context, groupID, userID int64, mutedUntil *time.Time) error {
+	if _, err := m.db.ExecContext(ctx,
+		`UPDATE group_members SET muted_until = ? WHERE group_id = ? AND user_id = ?`,
+		mutedUntil, groupID, userID,
+	); err != nil {
+		return fmt.Errorf("update group member mute deadline: %w", err)
+	}
+	return nil
 }
 
 // GroupMemberProfile 是 MySQL JOIN 得到的成员与公开用户资料投影。

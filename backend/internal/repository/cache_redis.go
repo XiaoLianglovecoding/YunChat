@@ -20,6 +20,7 @@ import (
 var (
 	replaceFriendOwnerScript       = goredis.NewScript(replaceFriendOwnerLua)
 	replaceGroupMembersOwnerScript = goredis.NewScript(replaceGroupMembersOwnerLua)
+	groupMembersLoadedScript       = goredis.NewScript(groupMembersLoadedLua)
 	releaseCacheWarmLockScript     = goredis.NewScript(`
 if redis.call('GET', KEYS[1]) == ARGV[1] then
     return redis.call('DEL', KEYS[1])
@@ -59,6 +60,7 @@ return #oldFriendIDs + legacyCount
 const replaceGroupMembersOwnerLua = `
 local groupID = ARGV[1]
 local legacyCount = tonumber(ARGV[2])
+local desiredCount = 0
 local oldMembers = redis.call('SMEMBERS', KEYS[1])
 local oldReverseOwners = redis.call('SMEMBERS', KEYS[4])
 for _, userID in ipairs(oldMembers) do
@@ -74,14 +76,32 @@ redis.call('DEL', KEYS[1], KEYS[2], KEYS[4])
 for i = 3 + legacyCount, #ARGV, 2 do
     local userID = ARGV[i]
     local infoJSON = ARGV[i + 1]
+    desiredCount = desiredCount + 1
     redis.call('SADD', KEYS[1], userID)
     redis.call('HSET', KEYS[2], userID, infoJSON)
     redis.call('SADD', 'user_groups:' .. userID, groupID)
     redis.call('SADD', KEYS[4], userID)
 end
-redis.call('SET', KEYS[3], '1')
+-- Store the expected cardinality rather than a boolean. EnsureGroupAccess can
+-- then detect independent eviction/corruption of either the Set or Hash and
+-- rebuild before the authorization Lua trusts an incomplete projection.
+redis.call('SET', KEYS[3], desiredCount)
 redis.call('SET', KEYS[5], '1')
 return #oldMembers + #oldReverseOwners + legacyCount
+`
+
+const groupMembersLoadedLua = `
+local expectedCount = tonumber(redis.call('GET', KEYS[1]))
+if not expectedCount then
+    return 0
+end
+if redis.call('SCARD', KEYS[2]) ~= expectedCount then
+    return 0
+end
+if redis.call('HLEN', KEYS[3]) ~= expectedCount then
+    return 0
+end
+return 1
 `
 
 func friendLoadedKey(userID int64) string {
@@ -125,7 +145,15 @@ func (r *RedisRepoImpl) BlacklistLoaded(ctx context.Context, userID int64) (bool
 }
 
 func (r *RedisRepoImpl) GroupMembersLoaded(ctx context.Context, groupID int64) (bool, error) {
-	return r.cacheLoaded(ctx, groupMemberLoadedKey(groupID))
+	loaded, err := groupMembersLoadedScript.Run(ctx, r.rdb, []string{
+		groupMemberLoadedKey(groupID),
+		fmt.Sprintf("group_members:%d", groupID),
+		fmt.Sprintf("group_member_info:%d", groupID),
+	}).Int()
+	if err != nil {
+		return false, fmt.Errorf("validate group member projection %d: %w", groupID, err)
+	}
+	return loaded == 1, nil
 }
 
 func (r *RedisRepoImpl) cacheLoaded(ctx context.Context, key string) (bool, error) {

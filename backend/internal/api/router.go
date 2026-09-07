@@ -73,6 +73,8 @@ var protectedRoutes = []TodoRoute{
 	{http.MethodDelete, "/group/:groupID/member/:memberID", "GROUP-002", "移除群成员"},
 	{http.MethodGet, "/group/:groupID/members", "GROUP-002", "群成员列表"},
 	{http.MethodPut, "/group/:groupID/member/:memberID/role", "GROUP-003", "修改成员角色"},
+	{http.MethodPut, "/group/:groupID/member/:memberID/mute", "GROUP-003", "禁言群成员"},
+	{http.MethodDelete, "/group/:groupID/member/:memberID/mute", "GROUP-003", "解除群成员禁言"},
 	{http.MethodPut, "/group/:groupID/owner", "GROUP-004", "转让群主"},
 	{http.MethodPost, "/group/:groupID/leave", "GROUP-004", "退出群组"},
 
@@ -192,6 +194,9 @@ func NewRouter(opts RouterOptions) *gin.Engine {
 		handlers[routeKey(http.MethodPost, "/group/:groupID/member")] = groupHandler.AddMember
 		handlers[routeKey(http.MethodDelete, "/group/:groupID/member/:memberID")] = groupHandler.RemoveMember
 		handlers[routeKey(http.MethodGet, "/group/:groupID/members")] = groupHandler.ListMembers
+		handlers[routeKey(http.MethodPut, "/group/:groupID/member/:memberID/role")] = groupHandler.UpdateMemberRole
+		handlers[routeKey(http.MethodPut, "/group/:groupID/member/:memberID/mute")] = groupHandler.MuteMember
+		handlers[routeKey(http.MethodDelete, "/group/:groupID/member/:memberID/mute")] = groupHandler.UnmuteMember
 	}
 
 	v1 := r.Group("/api/v1")

@@ -49,4 +49,7 @@ func TestGroupMessageLuaEvaluatesMuteDeadlineAgainstRedisTime(t *testing.T) {
 	if strings.Contains(luaGroupMsgCheck, "if info.muted then") {
 		t.Error("group message Lua must not rely on a frozen muted boolean")
 	}
+	if !strings.Contains(luaGroupMsgCheck, "if not memberInfo then") {
+		t.Error("group message Lua must fail closed when member metadata is missing")
+	}
 }

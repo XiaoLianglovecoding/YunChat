@@ -171,11 +171,25 @@ POST/DELETE /group/:groupID/member...
 
 前端以每页 100 条循环收齐当前最多 500 人，并让聊天页与管理抽屉共享同一个 Query Key。完整设计、错误码与手工验证见 `docs/GROUP_MEMBER_TUTORIAL.md`。
 
+### 群角色与禁言
+
+```text
+PUT /group/:groupID/member/:memberID/role
+PUT/DELETE /group/:groupID/member/:memberID/mute
+  -> 锁 groups -> 操作者 member -> 目标 member
+  -> 角色：只有真实 owner_id 可把非群主设为 role=0/1
+  -> 禁言：群主可管 admin/member，admin 只可管 member
+  -> UPDATE role 或 muted_until + 同事务 cache_reconcile_event
+  -> COMMIT 后按完整 MySQL 快照重建 group_member_info
+```
+
+禁言保存绝对截止时间而非永久布尔值。群消息 Lua 使用 Redis `TIME` 与缓存中的 Unix 毫秒 `muted_until` 比较，仍在期限内返回 `5002`，到期后无需定时任务即可自动放行。`group_member_loaded:{gid}` 保存预期成员数；`EnsureGroupAccess` 同时比较成员 Set 和信息 Hash 的数量，任一独立丢失都会回源。若检查后到 Lua 执行前 Hash field 又消失，Lua 也会 fail-closed，避免把缺失元数据误当作“未禁言”。详见 `docs/GROUP_ROLE_MUTE_TUTORIAL.md`。
+
 启动预热调用 `CacheTruthService.Warm`，沿用有界 owner index；运维 `cachectl rebuild` 调用严格 `Rebuild`，会在资源锁内重置索引 marker，并通过增量 SCAN 清理索引外人工孤儿。这样日常请求不承担全库扫描成本，显式修复又能兑现审计结果。
 
 ## 当前安全策略
 
-- 注册、登录、刷新和公开头像读取无需 access token；其余 38 个业务路由统一经过 JWT 中间件。
+- 注册、登录、刷新和公开头像读取无需 access token；其余 40 个业务路由统一经过 JWT 中间件。
 - 未实现的受保护业务只有在鉴权成功后才返回结构化 501，缺失或无效 Token 先返回 401。
 - 登录对不存在用户执行 dummy bcrypt；客户端只看到统一的 1105，不泄露账号是否存在。
 - refresh token 在 Redis 一次性轮换；改名和改密会按用户索引撤销旧刷新会话。

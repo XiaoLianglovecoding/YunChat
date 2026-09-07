@@ -107,7 +107,7 @@
 | `friend_owner_index_loaded:{uid}` | String | owner index 已完成兼容迁移；严格运维重建会在资源锁内先清除此 marker |
 | `blacklist:{uid}` | Set | 当前用户主动拉黑的 ID；私聊 Lua 检查两个方向 |
 | `blacklist_loaded:{uid}` | String | 区分“确定为空”和“Redis 未加载” |
-| `group_member_loaded:{gid}` | String | 群成员 Set/Hash/反向集合已加载标记 |
+| `group_member_loaded:{gid}` | String（十进制整数） | MySQL 快照的预期成员数；Set/Hash 数量均匹配才视为已加载 |
 | `group_reverse_owner_index:{gid}` | Set | 需要维护 `user_groups:{uid}` 的用户 ID，供有界原子替换 |
 | `group_reverse_owner_index_loaded:{gid}` | String | 旧缓存反向关系已完成一次增量 SCAN 迁移；严格运维重建会先清除此 marker |
 | `cache_warm_lock:{resource}:{id}` | String，短 TTL | 按需回源的带随机所有权锁，防缓存击穿 |
@@ -135,11 +135,15 @@ GROUP-002 成员添加/移除沿用同一规则。事务必须先 `SELECT groups
 
 成员分页从 MySQL 查询：`group_members JOIN users` 补齐 `username/avatar_url`，按 `role DESC, joined_at ASC, id ASC` 稳定排序，`COUNT(*)` 提供真实总数。`limit` 最大 100；非成员不能读取。Redis 的 `group_members:{gid}`、`group_member_info:{gid}` 与 `user_groups:{uid}` 由同一次原子重建共同维护。
 
+GROUP-003 的角色与禁言仍然只更新 `group_members`：角色请求只允许 0/1，不能借此写入群主角色 2；`muted_until=NULL` 表示解禁，未来 UTC 截止时间表示禁言，过期值在审计上可以保留但不会继续生效。任免管理员只允许真实 `groups.owner_id`，禁言时群主可管理管理员/成员，管理员只可管理普通成员。UPDATE 与群成员协调事件同事务提交，完整重建保证改 role 不丢 muted_until、解禁也不丢 role。
+
+群成员 loaded marker 从旧布尔字符串升级为预期基数。`EnsureGroupAccess` 以 O(1) 的 `SCARD/HLEN` 同时校验 Set 与 Hash；老缓存中多成员群的 marker=`1` 会自动触发回源并被改写为真实数量。Lua 对“Set 中是成员但 Hash 元数据缺失”的竞态安全拒绝，避免缓存局部丢失绕过禁言。
+
 好友重建只替换 `friend:{owner}:*`，不会擅自删除另一用户拥有的方向；群成员重建会同时维护 Set、Hash、`user_groups` 和有界 owner index，不在 Lua 中运行全库 `KEYS`。
 
 调用私聊 Lua 前必须先执行 `CacheTruthService.EnsurePrivateAccess(sender, receiver)`；调用群聊 Lua 前执行 `EnsureGroupAccess(groupID)`。因此清空 Redis 后的第一次请求会回源，而不是把“key 不存在”误判成业务关系不存在。
 
-本项目把 Redis 开为 AOF 并显式使用 `noeviction`，但 AOF 不能替代上述重建逻辑。loaded marker 保障的是整库/整组 key 丢失后回源；如果运维人工删了业务成员或 Hash field，`cachectl audit` 会报告投影差异，再用严格 `rebuild` 修复。只损坏内部 owner index、业务投影仍正确时未必形成 audit mismatch，但严格重建仍会主动重建该索引：它在同资源锁内清除 loaded/index marker，使下一次替换执行增量 SCAN。启动预热与在线 fast path 不这样做，仍保持与单个 owner 关系数量成正比。
+本项目把 Redis 开为 AOF 并显式使用 `noeviction`，但 AOF 不能替代上述重建逻辑。好友/黑名单 loaded marker 能识别整组 key 丢失；群成员 marker 还会比较 Set、Hash 与预期人数，因此单边删除成员或 Hash field 时，下一次 `EnsureGroupAccess` 会自动回源。同基数的错误替换、JSON 内容损坏或反向关系漂移仍由 `cachectl audit` 报告，再用严格 `rebuild` 修复。只损坏内部 owner index、业务投影仍正确时未必形成 audit mismatch，但严格重建仍会主动重建该索引：它在同资源锁内清除 loaded/index marker，使下一次替换执行增量 SCAN。启动预热与在线 fast path 不这样做，仍保持与单个 owner 关系数量成正比。
 
 刷新令牌已采用一次性轮换：服务验证 JWT 后用 Redis `WATCH` 检查 `refresh:{oldJTI}`，在同一事务中删除旧会话和用户索引成员，再写入同一 family 的新 JTI。两个并发刷新只有一个能提交，另一个映射为业务码 1106。修改密码会先按 `refresh_user:{uid}` 撤销全部刷新会话，再更新 bcrypt 哈希，避免 Redis 故障时留下仍有效的旧刷新令牌。
 

@@ -1,5 +1,7 @@
 package api
 
+import "time"
+
 // 本文件只固化 HTTP 传输契约，不包含业务逻辑。
 
 type RegisterRequest struct {
@@ -83,7 +85,11 @@ type AddGroupMemberRequest struct {
 }
 
 type UpdateGroupMemberRoleRequest struct {
-	Role int `json:"role"`
+	Role *int `json:"role" binding:"required"`
+}
+
+type MuteGroupMemberRequest struct {
+	MutedUntil *time.Time `json:"muted_until" binding:"required"`
 }
 
 type TransferGroupOwnerRequest struct {

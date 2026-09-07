@@ -65,17 +65,21 @@ local milliseconds = tonumber(redisTime[1]) * 1000 + math.floor(tonumber(redisTi
 
 -- 2. Mute status check
 local memberInfo = redis.call('HGET', 'group_member_info:' .. groupID, senderID)
-if memberInfo then
-    local info = cjson.decode(memberInfo)
-    local mutedUntil = tonumber(info.muted_until)
-    if mutedUntil and mutedUntil > milliseconds then
-        return {2, 0, 0, 1, 1}
-    end
-    -- Rolling-upgrade safety for the old {muted:true, muted_until:"ISO"}
-    -- format. It fails closed until startup rebuild writes the numeric deadline.
-    if not mutedUntil and info.muted == true then
-        return {2, 0, 0, 1, 1}
-    end
+-- Membership without its role/mute metadata is an incomplete authorization
+-- projection. Fail closed if the Hash field disappears between cache warm-up
+-- and this script; a later reconciliation will restore it from MySQL.
+if not memberInfo then
+    return {1, 0, 0, 0, 0}
+end
+local info = cjson.decode(memberInfo)
+local mutedUntil = tonumber(info.muted_until)
+if mutedUntil and mutedUntil > milliseconds then
+    return {2, 0, 0, 1, 1}
+end
+-- Rolling-upgrade safety for the old {muted:true, muted_until:"ISO"}
+-- format. It fails closed until startup rebuild writes the numeric deadline.
+if not mutedUntil and info.muted == true then
+    return {2, 0, 0, 1, 1}
 end
 
 -- 3. Message dedup

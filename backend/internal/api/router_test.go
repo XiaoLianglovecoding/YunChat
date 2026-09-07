@@ -55,8 +55,8 @@ func TestPublicBusinessRouteReturnsTodo(t *testing.T) {
 	}
 }
 
-func TestOriginalBusinessRouteCountIsPreserved(t *testing.T) {
-	if got, want := len(BusinessRoutes()), 42; got != want {
+func TestBusinessRouteCountIncludesGroupMuteExtensions(t *testing.T) {
+	if got, want := len(BusinessRoutes()), 44; got != want {
 		t.Fatalf("business route count = %d, want %d", got, want)
 	}
 }
@@ -111,7 +111,7 @@ func TestEveryProtectedRouteRequiresAuthorization(t *testing.T) {
 	}
 }
 
-func TestGroup002RoutesReplaceTodoWithoutOpeningLaterGroupTasks(t *testing.T) {
+func TestCompletedGroupRoutesReplaceTodoWithoutOpeningGroup004(t *testing.T) {
 	router, token := groupTestRouter(t, completeGroupStub())
 	for _, request := range []struct {
 		method string
@@ -121,10 +121,13 @@ func TestGroup002RoutesReplaceTodoWithoutOpeningLaterGroupTasks(t *testing.T) {
 		{method: http.MethodPost, path: "/api/v1/group/9/member", body: `{"member_id":8}`},
 		{method: http.MethodDelete, path: "/api/v1/group/9/member/8"},
 		{method: http.MethodGet, path: "/api/v1/group/9/members?limit=20&offset=0"},
+		{method: http.MethodPut, path: "/api/v1/group/9/member/8/role", body: `{"role":1}`},
+		{method: http.MethodPut, path: "/api/v1/group/9/member/8/mute", body: `{"muted_until":"2099-01-01T00:00:00Z"}`},
+		{method: http.MethodDelete, path: "/api/v1/group/9/member/8/mute"},
 	} {
 		recorder := serveGroupRequest(router, token, request.method, request.path, request.body)
 		if recorder.Code != http.StatusOK {
-			t.Fatalf("%s %s status=%d body=%s, want GROUP-002 handler", request.method, request.path, recorder.Code, recorder.Body.String())
+			t.Fatalf("%s %s status=%d body=%s, want completed group handler", request.method, request.path, recorder.Code, recorder.Body.String())
 		}
 	}
 
@@ -133,7 +136,7 @@ func TestGroup002RoutesReplaceTodoWithoutOpeningLaterGroupTasks(t *testing.T) {
 		path   string
 		body   string
 	}{
-		{method: http.MethodPut, path: "/api/v1/group/9/member/8/role", body: `{"role":1}`},
+		{method: http.MethodPut, path: "/api/v1/group/9/owner", body: `{"new_owner_id":8}`},
 		{method: http.MethodPost, path: "/api/v1/group/9/leave"},
 	} {
 		recorder := serveGroupRequest(router, token, request.method, request.path, request.body)
