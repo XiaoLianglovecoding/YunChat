@@ -16,8 +16,9 @@ import (
 )
 
 const (
-	maxGroupNameRunes   = 50
-	maxGroupNoticeRunes = 300
+	maxGroupNameRunes      = 50
+	maxGroupNoticeRunes    = 300
+	defaultGroupMaxMembers = 500
 
 	defaultGroupMemberPageSize = 20
 	maxGroupMemberPageSize     = 100
@@ -88,7 +89,7 @@ func (s *GroupServiceImpl) Create(ctx context.Context, ownerID int64, rawName, r
 	if err != nil {
 		return 0, err
 	}
-	group := &model.Group{Name: name, Notice: notice, OwnerID: ownerID, MaxMembers: 500}
+	group := &model.Group{Name: name, Notice: notice, OwnerID: ownerID, MaxMembers: defaultGroupMaxMembers}
 	err = s.repository.WithinGroupTransaction(ctx, func(txCtx context.Context, tx repository.GroupRepository) error {
 		exists, err := tx.LockGroupCreator(txCtx, ownerID)
 		if err != nil {
@@ -490,6 +491,95 @@ func (s *GroupServiceImpl) Leave(ctx context.Context, groupID, userID int64) err
 		GroupID: groupID,
 		Reason:  model.GroupUpdatedReasonMemberLeft,
 	})
+	return nil
+}
+
+// Disband permanently removes the group's live metadata and memberships while
+// deliberately retaining group_messages as history. It is a desired-state
+// DELETE: retrying after a timeout succeeds even when the first request already
+// committed. Every live group mutation locks the same groups row first, so an
+// invitation/transfer cannot commit halfway through disbanding.
+func (s *GroupServiceImpl) Disband(ctx context.Context, groupID, operatorID int64) error {
+	if groupID <= 0 || operatorID <= 0 {
+		return apperror.New(apperror.CodeInvalidParam)
+	}
+
+	recipients := make([]int64, 0)
+	cleanupRequired := false
+	err := s.repository.WithinGroupTransaction(ctx, func(txCtx context.Context, tx repository.GroupRepository) error {
+		group, err := tx.GetGroupForUpdate(txCtx, groupID)
+		if err != nil {
+			return err
+		}
+		if group == nil {
+			// Both a retry and a never-existing positive ID satisfy DELETE's HTTP
+			// desired state, but only a durable tombstone proves that Redis cleanup
+			// belongs to a real old group. This prevents random IDs from forcing
+			// reverse-key scans and permanent negative-cache keys.
+			tombstoned, err := tx.IsGroupTombstoned(txCtx, groupID)
+			if err != nil {
+				return err
+			}
+			cleanupRequired = tombstoned
+			return nil
+		}
+		// groups.owner_id is authoritative. A stale/missing owner member row
+		// must not make an anomalous group impossible to clean up.
+		if group.OwnerID != operatorID {
+			return apperror.New(apperror.CodeNotOwnerOrAdmin)
+		}
+		members, err := tx.GetGroupMembers(txCtx, groupID)
+		if err != nil {
+			return err
+		}
+		recipients = make([]int64, 0, len(members))
+		for _, member := range members {
+			if member.UserID > 0 {
+				recipients = append(recipients, member.UserID)
+			}
+		}
+		// Keep the authenticated owner as a fallback recipient when recovering
+		// an anomalous group whose owner membership row is already missing.
+		recipients = append(recipients, operatorID)
+		if err := tx.UpsertGroupTombstone(txCtx, groupID, group.OwnerID); err != nil {
+			return err
+		}
+		if err := tx.DeleteGroupMembers(txCtx, groupID); err != nil {
+			return err
+		}
+		if err := tx.DeleteGroup(txCtx, groupID); err != nil {
+			return err
+		}
+		// The owner row may now be absent. Cache reconciliation explicitly
+		// supports a deleted owner and replaces the projection with empty state.
+		if err := tx.EnqueueCacheReconcile(txCtx, repository.CacheResourceGroupMembers, groupID); err != nil {
+			return err
+		}
+		cleanupRequired = true
+		return nil
+	})
+	if err != nil {
+		return groupServiceError(err)
+	}
+
+	if !cleanupRequired {
+		return nil
+	}
+	postCommitCtx := context.WithoutCancel(ctx)
+	// A tombstoned retry makes another best-effort cleanup attempt. A random ID
+	// returns above without touching Redis or creating a durable event.
+	s.refreshGroupMemberCache(postCommitCtx, groupID)
+	seen := make(map[int64]struct{}, len(recipients))
+	for _, userID := range recipients {
+		if _, duplicate := seen[userID]; duplicate {
+			continue
+		}
+		seen[userID] = struct{}{}
+		s.notifyGroupUser(postCommitCtx, userID, protocol.TypeGroupRemoved, model.GroupRemovedNotification{
+			GroupID: groupID,
+			Reason:  model.GroupRemovedReasonDissolved,
+		})
+	}
 	return nil
 }
 

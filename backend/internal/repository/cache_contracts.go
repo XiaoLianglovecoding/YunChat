@@ -47,6 +47,14 @@ type CacheEventWriter interface {
 type CacheSnapshotRepository interface {
 	ListFriendIDsForCache(context.Context, int64) ([]int64, error)
 	ListBlockedIDsForCache(context.Context, int64) ([]int64, error)
+	// IsGroupTombstoned is the persistent negative authorization fact. Unlike
+	// Redis loaded markers, it survives restoring an older Redis snapshot.
+	IsGroupTombstoned(context.Context, int64) (bool, error)
+	// GroupExistsForCache distinguishes an active group with zero member rows
+	// from a hard-deleted group. The distinction matters because only a
+	// confirmed deletion may remove group-message runtime keys such as outbox
+	// and group_seq.
+	GroupExistsForCache(context.Context, int64) (bool, error)
 	ListGroupMembersForCache(context.Context, int64) ([]model.GroupMember, error)
 }
 
@@ -57,6 +65,8 @@ type CacheTruthRepository interface {
 	CacheSnapshotRepository
 	WithinCacheSnapshot(context.Context, CacheResource, int64, func(context.Context, CacheSnapshotRepository) error) error
 	ListUserIDs(context.Context, int64, int) ([]int64, error)
+	// ListGroupIDs enumerates both live group IDs and permanent tombstone IDs so
+	// warm/rebuild/audit also revisit groups deleted before a Redis restore.
 	ListGroupIDs(context.Context, int64, int) ([]int64, error)
 	ClaimCacheReconcileEvents(context.Context, string, int, time.Duration) ([]CacheReconcileEvent, error)
 	MarkCacheReconcileSuccess(context.Context, int64, string) error
@@ -93,6 +103,11 @@ type RelationshipCacheRepository interface {
 	ReplaceFriendOwner(context.Context, int64, []int64) error
 	ReplaceBlacklistOwner(context.Context, int64, []int64) error
 	ReplaceGroupMembersOwner(context.Context, int64, []model.GroupMember) error
+	// DeleteDisbandedGroupRuntime performs the idempotent cleanup that is safe
+	// only after MySQL has confirmed that the group row no longer exists. It
+	// deliberately does not scan short-lived msg_dedup keys and does not own
+	// per-user conversation/read-state projections.
+	DeleteDisbandedGroupRuntime(context.Context, int64) error
 	ReadFriendSnapshot(context.Context, int64) (RelationshipCacheSnapshot, error)
 	ReadBlacklistSnapshot(context.Context, int64) (RelationshipCacheSnapshot, error)
 	ReadGroupMemberSnapshot(context.Context, int64) (GroupMemberCacheSnapshot, error)

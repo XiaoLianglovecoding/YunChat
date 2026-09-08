@@ -4,7 +4,7 @@ import { useState } from "react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { Friendship, Group, Page, GroupMember } from "../../goim-api-types";
 import { ApiError } from "../api/client";
-import { canLeaveGroup, canMuteGroupMember, canRemoveGroupMember, canTransferGroupOwnership, canUpdateGroupMemberRole, describeGroupMemberMute, GroupManagementDrawer, isGroupMemberMuted } from "../features/groups/GroupManagement";
+import { canDissolveGroup, canLeaveGroup, canMuteGroupMember, canRemoveGroupMember, canTransferGroupOwnership, canUpdateGroupMemberRole, describeGroupMemberMute, GroupManagementDrawer, isGroupMemberMuted } from "../features/groups/GroupManagement";
 import { friendsApi, groupsApi } from "../lib/api";
 import { useAuthStore } from "../stores/authStore";
 import { useChatStore } from "../stores/chatStore";
@@ -89,6 +89,7 @@ describe("group profile management", () => {
       syncCompleted: false,
       conversations: [],
       messagesByConversation: {},
+      dissolvedGroupIds: [],
       lastSyncTime: 0,
       lastSyncMsgId: 0,
     });
@@ -174,6 +175,8 @@ describe("group profile management", () => {
     expect(canLeaveGroup(group, ordinary, 3)).toBe(true);
     expect(canLeaveGroup(group, staleOwnerRole, 4)).toBe(true);
     expect(canLeaveGroup(group, undefined, 2)).toBe(false);
+    expect(canDissolveGroup(group, 1)).toBe(true);
+    expect(canDissolveGroup(group, 2)).toBe(false);
   });
 
   it("recognizes active and expired mute deadlines", () => {
@@ -386,15 +389,74 @@ describe("group profile management", () => {
     expect(screen.queryByText("你已经不在这个群聊中")).not.toBeInTheDocument();
   });
 
-  it("does not expose a leave action to the real owner", async () => {
+  it("shows dissolve instead of leave to the real owner", async () => {
     vi.spyOn(groupsApi, "get").mockResolvedValue(group);
     vi.spyOn(groupsApi, "members").mockResolvedValue(page([member(1, 2, "群主")], 1));
     vi.spyOn(friendsApi, "list").mockResolvedValue({ items: [], pagination: { total: 0, offset: 0, limit: 100, has_more: false } });
 
     renderManagement();
 
-    expect(await screen.findByText("群主需先转让身份才能退出群聊。")).toBeInTheDocument();
+    expect(await screen.findByText("群主不能直接退出；你可以先转让群主，或者解散整个群聊。")).toBeInTheDocument();
     expect(screen.queryByRole("button", { name: "退出群聊" })).not.toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "解散群聊" })).toBeInTheDocument();
+  });
+
+  it("lets the real owner confirm dissolution and clears local group state", async () => {
+    vi.spyOn(groupsApi, "get").mockResolvedValue(group);
+    vi.spyOn(groupsApi, "members").mockResolvedValue(page([member(1, 2, "群主"), member(2, 0, "成员")], 2));
+    vi.spyOn(friendsApi, "list").mockResolvedValue({ items: [], pagination: { total: 0, offset: 0, limit: 100, has_more: false } });
+    const dissolve = vi.spyOn(groupsApi, "dissolve").mockResolvedValue(undefined);
+    vi.spyOn(groupsApi, "list").mockResolvedValue([]);
+    const onClose = vi.fn();
+    const client = renderManagement(onClose);
+
+    fireEvent.click(await screen.findByRole("button", { name: "解散群聊" }));
+    const dialog = await screen.findByRole("alertdialog");
+    expect(within(dialog).getByText(/所有成员都会被移出/)).toBeInTheDocument();
+    expect(within(dialog).getByText(/此操作不可撤销/)).toBeInTheDocument();
+    fireEvent.click(within(dialog).getByRole("button", { name: "确认解散" }));
+
+    await waitFor(() => expect(dissolve).toHaveBeenCalledWith(22));
+    await waitFor(() => expect(useChatStore.getState().conversations).toHaveLength(0));
+    expect(useChatStore.getState().messagesByConversation.g_22).toBeUndefined();
+    expect(useChatStore.getState().dissolvedGroupIds).toEqual([22]);
+    await waitFor(() => expect(client.getQueryData(["group", 22])).toBeUndefined());
+    expect(client.getQueryData(["group-members", 22])).toBeUndefined();
+    expect(onClose).toHaveBeenCalledOnce();
+  });
+
+  it("treats group-not-found as a successful dissolution retry", async () => {
+    vi.spyOn(groupsApi, "get").mockResolvedValue(group);
+    vi.spyOn(groupsApi, "members").mockResolvedValue(page([member(1, 2, "群主")], 1));
+    vi.spyOn(friendsApi, "list").mockResolvedValue({ items: [], pagination: { total: 0, offset: 0, limit: 100, has_more: false } });
+    vi.spyOn(groupsApi, "dissolve").mockRejectedValue(new ApiError("group not found", 1302, 404));
+    vi.spyOn(groupsApi, "list").mockResolvedValue([]);
+    const onClose = vi.fn();
+    const client = renderManagement(onClose);
+
+    fireEvent.click(await screen.findByRole("button", { name: "解散群聊" }));
+    fireEvent.click(within(await screen.findByRole("alertdialog")).getByRole("button", { name: "确认解散" }));
+
+    await waitFor(() => expect(useChatStore.getState().conversations).toHaveLength(0));
+    expect(client.getQueryData(["group", 22])).toBeUndefined();
+    expect(client.getQueryData(["group-members", 22])).toBeUndefined();
+    expect(onClose).toHaveBeenCalledOnce();
+    expect(screen.queryByText("这个群聊不存在或已被解散")).not.toBeInTheDocument();
+  });
+
+  it("keeps local state and shows a stable message when dissolution permission is stale", async () => {
+    vi.spyOn(groupsApi, "get").mockResolvedValue(group);
+    vi.spyOn(groupsApi, "members").mockResolvedValue(page([member(1, 2, "缓存里的群主")], 1));
+    vi.spyOn(friendsApi, "list").mockResolvedValue({ items: [], pagination: { total: 0, offset: 0, limit: 100, has_more: false } });
+    vi.spyOn(groupsApi, "dissolve").mockRejectedValue(new ApiError("permission denied", 1301, 403));
+
+    renderManagement();
+    fireEvent.click(await screen.findByRole("button", { name: "解散群聊" }));
+    fireEvent.click(within(await screen.findByRole("alertdialog")).getByRole("button", { name: "确认解散" }));
+
+    expect(await screen.findByText("只有当前群主才能解散群聊")).toBeInTheDocument();
+    expect(useChatStore.getState().conversations).toHaveLength(1);
+    expect(useChatStore.getState().messagesByConversation.g_22).toBeDefined();
   });
 
   it("maps a stale-owner leave rejection without deleting the conversation", async () => {

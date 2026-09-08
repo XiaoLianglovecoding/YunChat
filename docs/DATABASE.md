@@ -2,7 +2,7 @@
 
 本文件记录从 `E:\IT\IM` 实际迁移、Repository、Lua 和 Consumer 代码审计出的事实。业务实现时以本文件和 `backend/scripts/migrations` 为基线，不以旧设计文档中的示例键名为准。
 
-## MySQL：13 张上游表 + 2 张 MyIM 表
+## MySQL：13 张上游表 + 3 张 MyIM 表
 
 | 表 | 主键与关键字段 | 现有索引/约束 | 业务备注 |
 | --- | --- | --- | --- |
@@ -10,6 +10,7 @@
 | `friend_requests` | from/to、message、status | 定向 pair UNIQUE、目标用户稳定分页索引 | 重新申请会替换同向终态旧行并生成新 ID |
 | `friendships` | user_id、friend_id | pair UNIQUE、`(user_id,created_at,id)` | 一段好友关系存双向两行 |
 | `groups` | name、owner_id、max_members | idx_owner | owner 与成员 role=2 双份表达 |
+| `group_tombstones` | group_id、原 owner_id、dissolved_at | group_id PRIMARY、解散时间索引 | 永久记录已解散 ID，防旧 Redis 快照恢复成员权限；不保存可展示群资料 |
 | `group_members` | group/user、role、muted_until | group-user UNIQUE、group/user 索引 | role：0 成员、1 管理员、2 群主 |
 | `private_messages` | Redis 生成 ID、client_msg_id、sender/receiver、content | sender-client UNIQUE、会话/接收方时间、FULLTEXT | client_msg_id 为空时兼容历史消息 |
 | `group_messages` | Redis 生成 ID、client_msg_id、group_seq | sender-client、group-seq UNIQUE；group-time、FULLTEXT | group-seq 可从持久层恢复 |
@@ -38,14 +39,15 @@
 3. 拉黑/解除：变更黑名单、终结旧申请并产生缓存协调事件。
 4. 创建群：创建 `groups`、创建群主成员行。
 5. 转让群主：旧群主降级、新群主升级、更新 `groups.owner_id`。
-6. 删除动态：删除评论、点赞、动态主体，并在提交后清缓存。
-7. 修改消息状态：持久撤回/个人删除状态与搜索可见性保持一致。
+6. 解散群：写永久墓碑、删除全部成员和群资料、写缓存协调事件。
+7. 删除动态：删除评论、点赞、动态主体，并在提交后清缓存。
+8. 修改消息状态：持久撤回/个人删除状态与搜索可见性保持一致。
 
 原代码在前四项存在非事务或事务不完整的风险，任务清单已经单列修正。
 
 ## 迁移现状
 
-当前完整保留上游 9 个文件，并追加 011、012：
+当前完整保留上游 9 个文件，并追加 011、012、013：
 
 ```text
 001_create_users.sql
@@ -59,6 +61,7 @@
 010_moment_comments_auto_increment_guard.sql
 011_foundation_schema.sql
 012_cache_truth.sql
+013_group_tombstones.sql
 ```
 
 注意：
@@ -84,6 +87,13 @@
 - 为好友列表增加 `(user_id, created_at, id)` 稳定分页索引。
 - 新增 `cache_reconcile_events`。业务事务记录的是“重新读取当前真相”，不是可能过期的 Redis `SET/DEL` 指令。
 - Worker 使用行锁租约领取事件；失败按指数退避重试，晚到事件也只会读取 MySQL 最新状态。
+
+## 已在 013 完成的群解散墓碑
+
+- 新增 `group_tombstones(group_id, owner_id, dissolved_at)`，与实时群删除处于同一事务。
+- 群 ID 使用自增且不复用；墓碑是永久的“这个 ID 已解散”事实，不随普通协调事件完成而删除。
+- 启动预热、`cachectl audit/rebuild` 枚举活动群与墓碑的并集，因此 Redis 恢复旧快照后仍能发现并清空旧成员投影。
+- 群消息授权前先查询主键墓碑；这多一次很小的 MySQL 点查，换来运行中 Redis 回滚时也不会信任旧的正缓存。以后若优化，必须用可证明等价的版本机制，不能直接删掉这次校验。
 
 仍留给业务任务决定：
 
@@ -125,7 +135,7 @@
 | `moment:like_loaded:{id}` | String | 点赞缓存已预热标记 |
 | `moment:like_lock:{id}` | String，短 TTL | 防缓存击穿锁 |
 
-好友、群成员、黑名单都以 MySQL 为唯一真相，Redis 只是 Lua 使用的可重建投影。当前已经有三层恢复：服务启动异步预热、消息校验前按 loaded marker 回源、事务协调事件后台重试。管理命令 `cmd/cachectl` 还能执行全量重建和只读一致性巡检。
+好友、群成员、黑名单都以 MySQL 为唯一真相，Redis 只是 Lua 使用的可重建投影。当前已经有三层恢复：服务启动异步预热、消息校验前按 loaded marker 回源、事务协调事件后台重试。活动群和永久墓碑都会参与群投影的预热/巡检；群消息授权还会先查 MySQL 墓碑，从而拒绝一份“结构完整但来自解散前”的旧 Redis 正缓存。管理命令 `cmd/cachectl` 还能执行全量重建和只读一致性巡检。
 
 关系写入采用“事务 Outbox + 提交后 fast path”：核心状态与协调事件在同一 MySQL 事务提交；随后 fast path 也不直接执行旧 `SET/DEL`，而是重新读 MySQL。同资源 Redis 锁串行多 Worker，MySQL `users/groups` owner 行用 `FOR UPDATE` 锁到 Redis 原子替换完成，因而旧快照不能在新状态之后落地。立即更新失败不会谎称 MySQL 回滚，Worker 会重试。
 
@@ -138,6 +148,8 @@ GROUP-002 成员添加/移除沿用同一规则。事务必须先 `SELECT groups
 GROUP-003 的角色与禁言仍然只更新 `group_members`：角色请求只允许 0/1，不能借此写入群主角色 2；`muted_until=NULL` 表示解禁，未来 UTC 截止时间表示禁言，过期值在审计上可以保留但不会继续生效。任免管理员只允许真实 `groups.owner_id`，禁言时群主可管理管理员/成员，管理员只可管理普通成员。UPDATE 与群成员协调事件同事务提交，完整重建保证改 role 不丢 muted_until、解禁也不丢 role。
 
 GROUP-004 转让群主按 `groups -> 旧群主 member -> 新群主 member` 顺序加锁，在同一事务把旧群主降为 role=0、把新群主升为 role=2 并清空其 `muted_until`、更新 `groups.owner_id`，最后写 `group_members` 协调事件。退群同样先锁群和自己的成员行；真实 owner_id 返回 1306，管理员/普通成员则删除自己的成员行并写协调事件。提交后完整重建会同时修正成员 Set、角色/禁言 Hash 和用户反向群 Set；WS 只发送提交后的刷新提示，不参与权威事务。
+
+GROUP-005 解散群先锁 `groups` 并只认真实 `owner_id`，删除前保存通知成员，然后在同一事务写 `group_tombstones`、批量删除 `group_members`、删除 `groups` 并写 `group_members` 协调事件。`group_messages` 和已有撤回记录不删除，只作服务端审计历史；成员快照已删除，所以当前不向原成员开放解散后历史查看。DELETE 对已不存在群幂等成功，但只有查到墓碑的真实重试才再清 Redis；随机 ID 不产生扫描和负键。后台对账读取空成员真相，清理正反向成员投影并写 `group_member_loaded=0` 负缓存；只有确认群行不存在才额外删除 Redis `outbox:{gid}` 与 `group_seq:{gid}`。`msg_dedup` 依靠 300 秒 TTL，用户级 `conv_list/unread/group_read_pos` 留给消息同步任务按现行成员关系过滤。
 
 群成员 loaded marker 从旧布尔字符串升级为预期基数。`EnsureGroupAccess` 以 O(1) 的 `SCARD/HLEN` 同时校验 Set 与 Hash；老缓存中多成员群的 marker=`1` 会自动触发回源并被改写为真实数量。Lua 对“Set 中是成员但 Hash 元数据缺失”的竞态安全拒绝，避免缓存局部丢失绕过禁言。
 
@@ -166,5 +178,6 @@ GROUP-004 转让群主按 `groups -> 旧群主 member -> 新群主 member` 顺�
 - 消费者幂等状态。
 - 私聊/群聊重投后的未读计数幂等。
 - 数据库写成功但 ACK 丢失时的重复主键处理。
+- `MQ-002` 处理晚到群消息前必须检查 `group_tombstones`；已解散群不得重新写 `outbox/group_seq/conv_list/unread`。
 
 `/ready` 已检查 RabbitMQ 连接与主队列；消费者处理语义由 `MQ-001`、`MQ-002` 和 `MSG-007` 完成。

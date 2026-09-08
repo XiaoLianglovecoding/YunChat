@@ -10,6 +10,7 @@ const (
 
 const (
 	GroupRemovedReasonLeft             = "left"
+	GroupRemovedReasonDissolved        = "dissolved"
 	GroupUpdatedReasonOwnerTransferred = "owner_transferred"
 	GroupUpdatedReasonMemberLeft       = "member_left"
 )

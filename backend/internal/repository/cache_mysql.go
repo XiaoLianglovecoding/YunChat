@@ -50,8 +50,15 @@ func (m *MySQLRepoImpl) WithinCacheSnapshot(
 	lockErr := child.db.QueryRowContext(ctx,
 		"SELECT id FROM "+table+" WHERE id = ? FOR UPDATE", resourceID,
 	).Scan(&lockedID)
-	// A deleted owner has no row to lock, but its now-empty projection still
-	// needs clearing. Auto-increment IDs are not reused by this project.
+	// A dissolved group has no live owner row. Lock its permanent tombstone so
+	// rebuilds serialize on a durable row even after an old Redis restoration.
+	if resource == CacheResourceGroupMembers && errors.Is(lockErr, sql.ErrNoRows) {
+		lockErr = child.db.QueryRowContext(ctx,
+			"SELECT group_id FROM group_tombstones WHERE group_id = ? FOR UPDATE", resourceID,
+		).Scan(&lockedID)
+	}
+	// Never-existing IDs have neither row. Explicit reconciliation may still
+	// read an empty projection, but online DELETE avoids creating such work.
 	if lockErr != nil && !errors.Is(lockErr, sql.ErrNoRows) {
 		_ = tx.Rollback()
 		return fmt.Errorf("lock cache owner %s:%d: %w", resource, resourceID, lockErr)
@@ -83,7 +90,17 @@ func (m *MySQLRepoImpl) ListUserIDs(ctx context.Context, afterID int64, limit in
 }
 
 func (m *MySQLRepoImpl) ListGroupIDs(ctx context.Context, afterID int64, limit int) ([]int64, error) {
-	return m.listCacheOwnerIDs(ctx, "SELECT id FROM `groups` WHERE id > ? ORDER BY id LIMIT ?", afterID, limit)
+	const query = "SELECT owner_id FROM (" +
+		"SELECT id AS owner_id FROM `groups` WHERE id > ? " +
+		"UNION " +
+		"SELECT group_id AS owner_id FROM group_tombstones WHERE group_id > ?" +
+		") AS group_cache_owners ORDER BY owner_id LIMIT ?"
+	rows, err := m.db.QueryContext(ctx, query, afterID, afterID, normalizeCachePageLimit(limit))
+	if err != nil {
+		return nil, fmt.Errorf("list live and dissolved group cache owners: %w", err)
+	}
+	defer rows.Close()
+	return scanInt64Rows(rows, "group cache owner IDs")
 }
 
 func (m *MySQLRepoImpl) listCacheOwnerIDs(ctx context.Context, query string, afterID int64, limit int) ([]int64, error) {
@@ -123,6 +140,19 @@ func (m *MySQLRepoImpl) ListBlockedIDsForCache(ctx context.Context, userID int64
 	}
 	defer rows.Close()
 	return scanInt64Rows(rows, "blocked IDs")
+}
+
+// GroupExistsForCache is also used as a read-only cold-ID guard. Cleanup
+// decisions call it through WithinCacheSnapshot, whose group/tombstone lock
+// prevents a rebuild racing disband from deleting a still-active runtime.
+func (m *MySQLRepoImpl) GroupExistsForCache(ctx context.Context, groupID int64) (bool, error) {
+	var exists bool
+	if err := m.db.QueryRowContext(ctx,
+		"SELECT EXISTS(SELECT 1 FROM `groups` WHERE id = ?)", groupID,
+	).Scan(&exists); err != nil {
+		return false, fmt.Errorf("check authoritative group %d existence: %w", groupID, err)
+	}
+	return exists, nil
 }
 
 func scanInt64Rows(rows *sql.Rows, label string) ([]int64, error) {

@@ -77,6 +77,7 @@ var protectedRoutes = []TodoRoute{
 	{http.MethodDelete, "/group/:groupID/member/:memberID/mute", "GROUP-003", "解除群成员禁言"},
 	{http.MethodPut, "/group/:groupID/owner", "GROUP-004", "转让群主"},
 	{http.MethodPost, "/group/:groupID/leave", "GROUP-004", "退出群组"},
+	{http.MethodDelete, "/group/:groupID", "GROUP-005", "解散群组"},
 
 	{http.MethodPost, "/moment", "MOMENT-001", "发布动态"},
 	{http.MethodGet, "/moment/:momentID", "MOMENT-001", "动态详情"},
@@ -199,6 +200,7 @@ func NewRouter(opts RouterOptions) *gin.Engine {
 		handlers[routeKey(http.MethodDelete, "/group/:groupID/member/:memberID/mute")] = groupHandler.UnmuteMember
 		handlers[routeKey(http.MethodPut, "/group/:groupID/owner")] = groupHandler.TransferOwnership
 		handlers[routeKey(http.MethodPost, "/group/:groupID/leave")] = groupHandler.Leave
+		handlers[routeKey(http.MethodDelete, "/group/:groupID")] = groupHandler.Disband
 	}
 
 	v1 := r.Group("/api/v1")

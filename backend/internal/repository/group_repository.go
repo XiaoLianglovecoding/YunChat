@@ -30,12 +30,56 @@ type GroupRepository interface {
 	CountGroupMembers(context.Context, int64) (int64, error)
 	GetGroupMembers(context.Context, int64) ([]model.GroupMember, error)
 	RemoveGroupMember(context.Context, int64, int64) error
+	UpsertGroupTombstone(context.Context, int64, int64) error
+	IsGroupTombstoned(context.Context, int64) (bool, error)
+	DeleteGroupMembers(context.Context, int64) error
+	DeleteGroup(context.Context, int64) error
 	UpdateGroupOwner(context.Context, int64, int64) error
 	UpdateGroupMemberRole(context.Context, int64, int64, int) error
 	UpdateGroupMemberMute(context.Context, int64, int64, *time.Time) error
 	ListGroupMembersPage(context.Context, int64, int, int) ([]GroupMemberProfile, error)
 	ListGroupsByUser(context.Context, int64) ([]model.Group, error)
 	UpdateGroupProfile(context.Context, int64, string, string) error
+}
+
+// UpsertGroupTombstone writes a permanent negative fact before the live group
+// state is deleted in the same transaction. IDs are never reused, so keeping
+// the first dissolution timestamp forever is intentional.
+func (m *MySQLRepoImpl) UpsertGroupTombstone(ctx context.Context, groupID, ownerID int64) error {
+	if _, err := m.db.ExecContext(ctx, `INSERT INTO group_tombstones(group_id, owner_id)
+		VALUES(?, ?) ON DUPLICATE KEY UPDATE owner_id = ?`, groupID, ownerID, ownerID); err != nil {
+		return fmt.Errorf("upsert group tombstone: %w", err)
+	}
+	return nil
+}
+
+func (m *MySQLRepoImpl) IsGroupTombstoned(ctx context.Context, groupID int64) (bool, error) {
+	var tombstoned bool
+	if err := m.db.QueryRowContext(ctx,
+		"SELECT EXISTS(SELECT 1 FROM group_tombstones WHERE group_id = ?)", groupID,
+	).Scan(&tombstoned); err != nil {
+		return false, fmt.Errorf("check group %d tombstone: %w", groupID, err)
+	}
+	return tombstoned, nil
+}
+
+// DeleteGroupMembers 批量删除一个群的实时成员状态。群解散不能逐成员
+// DELETE，否则成员越多事务持锁越久、数据库往返次数也越多。
+func (m *MySQLRepoImpl) DeleteGroupMembers(ctx context.Context, groupID int64) error {
+	if _, err := m.db.ExecContext(ctx, `DELETE FROM group_members WHERE group_id = ?`, groupID); err != nil {
+		return fmt.Errorf("delete all group members: %w", err)
+	}
+	return nil
+}
+
+// DeleteGroup 只删除群的当前资料。group_messages 故意不在这里删除：群解散
+// 与历史消息留存是两种不同生命周期，GROUP-005 冻结为保留 MySQL 历史消息。
+func (m *MySQLRepoImpl) DeleteGroup(ctx context.Context, groupID int64) error {
+	result, err := m.db.ExecContext(ctx, "DELETE FROM `groups` WHERE id = ?", groupID)
+	if err != nil {
+		return fmt.Errorf("delete group: %w", err)
+	}
+	return requireOneAffected(result, "delete group")
 }
 
 // UpdateGroupOwner 只更新群主外键，避免复用会连带覆盖群名和公告的旧通用 UpdateGroup。

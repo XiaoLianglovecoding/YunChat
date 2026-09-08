@@ -1,5 +1,5 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { Crown, LogOut, ShieldCheck, UserPlus, Users, Volume2, VolumeX, X } from "lucide-react";
+import { Crown, LogOut, ShieldCheck, Trash2, UserPlus, Users, Volume2, VolumeX, X } from "lucide-react";
 import { useEffect, useMemo, useRef, useState } from "react";
 import type { Group, GroupMember } from "../../../goim-api-types";
 import { ApiError } from "../../api/client";
@@ -91,6 +91,11 @@ export function canLeaveGroup(group: Group | undefined, currentMember: GroupMemb
   );
 }
 
+export function canDissolveGroup(group: Group | undefined, currentUserId: number) {
+  // role=2 只是成员资料展示；真正的群主身份始终以 groups.owner_id 为准。
+  return Boolean(group && currentUserId > 0 && group.owner_id === currentUserId);
+}
+
 function membersAfterOwnershipTransfer(members: GroupMember[], previousOwnerId: number, newOwnerId: number) {
   return members.map((member) => {
     // 群主不能处于禁言状态；后端事务也会在升级新群主时清空该字段。
@@ -161,6 +166,7 @@ export function GroupManagementDrawer({ conversation, open, onClose }: GroupMana
   const currentUserId = useAuthStore((state) => state.user?.id ?? 0);
   const queryClient = useQueryClient();
   const removeConversation = useChatStore((state) => state.removeConversation);
+  const markGroupDissolved = useChatStore((state) => state.markGroupDissolved);
   const setConversationIdentity = useChatStore((state) => state.setConversationIdentity);
   const setConversationMuted = useChatStore((state) => state.setConversationMuted);
   const groupId = conversation.targetId;
@@ -169,7 +175,7 @@ export function GroupManagementDrawer({ conversation, open, onClose }: GroupMana
   const [editing, setEditing] = useState(false);
   const [name, setName] = useState(conversation.name);
   const [notice, setNotice] = useState(localGroup.notice);
-  const [danger, setDanger] = useState<{ type: "remove" | "leave" | "transfer" | "role"; memberId?: number; nextRole?: 0 | 1 } | null>(null);
+  const [danger, setDanger] = useState<{ type: "remove" | "leave" | "dissolve" | "transfer" | "role"; memberId?: number; nextRole?: 0 | 1 } | null>(null);
   const [muteTargetId, setMuteTargetId] = useState<number | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [muteSaving, setMuteSaving] = useState(false);
@@ -221,6 +227,7 @@ export function GroupManagementDrawer({ conversation, open, onClose }: GroupMana
     liveAction: () => Promise<unknown>,
     revalidateAfterSuccess = true,
     acceptedErrorCodes: number[] = [],
+    contextualErrorMessages: Partial<Record<number, string>> = {},
   ) => {
     if (actionRunningRef.current) return false;
     actionRunningRef.current = true;
@@ -238,7 +245,11 @@ export function GroupManagementDrawer({ conversation, open, onClose }: GroupMana
         void queryClient.invalidateQueries({ queryKey: ["group", groupId] });
         void queryClient.invalidateQueries({ queryKey: groupMembersQueryKey(groupId) });
       }
-      setError(groupErrorMessage(failure, "操作失败，请稍后重试"));
+      if (failure instanceof ApiError && contextualErrorMessages[failure.code]) {
+        setError(contextualErrorMessages[failure.code]!);
+      } else {
+        setError(groupErrorMessage(failure, "操作失败，请稍后重试"));
+      }
       return false;
     } finally {
       actionRunningRef.current = false;
@@ -303,6 +314,23 @@ export function GroupManagementDrawer({ conversation, open, onClose }: GroupMana
       }
       succeeded = await run(() => undefined, () => groupsApi.leave(groupId), false, [1302, 5001]);
     }
+    if (danger.type === "dissolve") {
+      if (!canDissolveGroup(group, currentUserId)) {
+        setDanger(null);
+        setError("只有当前群主才能解散群聊");
+        revalidateGroupState();
+        return;
+      }
+      // DELETE 是“把群变为不存在”的期望状态。第一次请求成功但响应丢失时，
+      // 重试可能得到 1302；此时目标已经达成，前端仍应完成本地清理。
+      succeeded = await run(
+        () => undefined,
+        () => groupsApi.dissolve(groupId),
+        false,
+        [1302],
+        { 1301: "只有当前群主才能解散群聊" },
+      );
+    }
     if (danger.type === "transfer" && danger.memberId) {
       const target = members.find((member) => member.user_id === danger.memberId);
       if (!target || !canTransferGroupOwnership(group, currentUserId, target)) {
@@ -334,12 +362,17 @@ export function GroupManagementDrawer({ conversation, open, onClose }: GroupMana
       }
     }
     if (danger.type === "role" && danger.memberId && danger.nextRole !== undefined) succeeded = await updateRole(danger.memberId, danger.nextRole);
-    if (!succeeded) return;
+    if (!succeeded) {
+      // 解散失败时关闭遮挡页面的确认框，让用户立即看到稳定的错误提示。
+      if (danger.type === "dissolve") setDanger(null);
+      return;
+    }
     setDanger(null);
-    if (danger.type === "leave") {
+    if (danger.type === "leave" || danger.type === "dissolve") {
       // 先让宿主卸载当前抽屉里的活跃 Query observer，再删除对应缓存，
       // 否则 observer 可能在 removeQueries 后立刻把同一个 Query 建回来。
-      removeConversation(conversation.id);
+      if (danger.type === "dissolve") markGroupDissolved(groupId);
+      else removeConversation(conversation.id);
       onClose();
       if (!previewMode) {
         // Calling now increments the refresh generation synchronously, before
@@ -364,9 +397,9 @@ export function GroupManagementDrawer({ conversation, open, onClose }: GroupMana
   const memberIds = useMemo(() => new Set(members.map((member) => member.user_id)), [members]);
   const inviteCandidates = (friendsQuery.data?.items ?? []).filter((friend) => !memberIds.has(friend.friend_id) && !friend.is_blocked);
   const memberSummary = memberTotal !== undefined ? `${memberTotal} 位成员` : membersQuery.isError ? "成员加载失败" : "成员加载中";
-  const confirmationLabel = danger?.type === "leave" ? "退出群聊" : danger?.type === "transfer" ? "转让群主" : danger?.type === "role" ? (danger.nextRole === 1 ? "设为管理员" : "取消管理员") : "移除成员";
-  const confirmationDescription = danger?.type === "leave" ? "退出后，本地会话和消息会被移除，你也将不再接收这个群的消息。" : danger?.type === "transfer" ? `转让后，${dangerTarget?.username || `用户 #${danger.memberId ?? ""}`} 将成为新群主，你将变为普通成员。` : danger?.type === "role" ? (danger.nextRole === 1 ? `用户 #${danger.memberId ?? ""} 将获得群管理权限。` : `用户 #${danger.memberId ?? ""} 将失去群管理权限。`) : `确认将用户 #${danger?.memberId ?? ""} 移出群聊？`;
-  const confirmationTitle = danger?.type === "leave" ? "确定退出群聊？" : danger?.type === "transfer" ? "转让群主？" : danger?.type === "role" ? (danger.nextRole === 1 ? "设为管理员？" : "取消管理员？") : "移除这位成员？";
+  const confirmationLabel = danger?.type === "leave" ? "退出群聊" : danger?.type === "dissolve" ? "确认解散" : danger?.type === "transfer" ? "转让群主" : danger?.type === "role" ? (danger.nextRole === 1 ? "设为管理员" : "取消管理员") : "移除成员";
+  const confirmationDescription = danger?.type === "leave" ? "退出后，本地会话和消息会被移除，你也将不再接收这个群的消息。" : danger?.type === "dissolve" ? `解散“${group?.name ?? conversation.name}”后，所有成员都会被移出，群聊将无法继续使用，本地会话和消息也会被清理。此操作不可撤销。` : danger?.type === "transfer" ? `转让后，${dangerTarget?.username || `用户 #${danger.memberId ?? ""}`} 将成为新群主，你将变为普通成员。` : danger?.type === "role" ? (danger.nextRole === 1 ? `用户 #${danger.memberId ?? ""} 将获得群管理权限。` : `用户 #${danger.memberId ?? ""} 将失去群管理权限。`) : `确认将用户 #${danger?.memberId ?? ""} 移出群聊？`;
+  const confirmationTitle = danger?.type === "leave" ? "确定退出群聊？" : danger?.type === "dissolve" ? "确定解散这个群聊？" : danger?.type === "transfer" ? "转让群主？" : danger?.type === "role" ? (danger.nextRole === 1 ? "设为管理员？" : "取消管理员？") : "移除这位成员？";
 
   return (
     <>
@@ -431,9 +464,9 @@ export function GroupManagementDrawer({ conversation, open, onClose }: GroupMana
             </div>
           ))}
         </section>
-        {isOwner ? <p className="group-query-state">群主需先转让身份才能退出群聊。</p> : canLeaveGroup(group, currentMember, currentUserId) ? <Button disabled={actionMutation.isPending} leadingIcon={<LogOut size={15} />} onClick={() => setDanger({ type: "leave" })} variant="danger">退出群聊</Button> : null}
+        {isOwner ? <><p className="group-query-state">群主不能直接退出；你可以先转让群主，或者解散整个群聊。</p><Button disabled={actionMutation.isPending} leadingIcon={<Trash2 size={15} />} onClick={() => setDanger({ type: "dissolve" })} variant="danger">解散群聊</Button></> : canLeaveGroup(group, currentMember, currentUserId) ? <Button disabled={actionMutation.isPending} leadingIcon={<LogOut size={15} />} onClick={() => setDanger({ type: "leave" })} variant="danger">退出群聊</Button> : null}
       </Drawer>
-      <ConfirmDialog confirmLabel={confirmationLabel} confirming={actionMutation.isPending} description={confirmationDescription} destructive={danger?.type === "leave" || danger?.type === "remove"} onClose={() => { if (!actionMutation.isPending) setDanger(null); }} onConfirm={() => void confirmDanger()} open={Boolean(danger)} title={confirmationTitle} />
+      <ConfirmDialog confirmLabel={confirmationLabel} confirming={actionMutation.isPending} description={confirmationDescription} destructive={danger?.type === "leave" || danger?.type === "remove" || danger?.type === "dissolve"} onClose={() => { if (!actionMutation.isPending) setDanger(null); }} onConfirm={() => void confirmDanger()} open={Boolean(danger)} title={confirmationTitle} />
     </>
   );
 }

@@ -161,7 +161,7 @@ export interface KickNotification {
 
 export interface GroupRemovedNotification {
   groupId: number;
-  reason: "removed" | "left";
+  reason: "removed" | "left" | "dissolved";
 }
 
 export interface GroupAddedNotification {

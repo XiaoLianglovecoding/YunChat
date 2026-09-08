@@ -118,8 +118,9 @@ rg -n 'TODO\[[A-Z0-9,-]+\]' backend
   依赖：GROUP-002。验收：转让三处状态在同一事务；群主不能直接退出；缓存和 WS 群变更通知一致。
   已冻结规则：转让权限只认 `groups.owner_id`，目标必须是另一位现有成员；按群行、旧群主成员行、新群主成员行顺序加锁，在同一事务把旧群主降为普通成员、新群主升为群主并解除禁言、更新 `owner_id`、写 `group_members` 协调事件。真实群主退群返回 1306，管理员和普通成员只能删除自己的成员行；提交后按 MySQL 完整重建 Redis。转让向当前成员发送 `groupUpdated(owner_transferred)`，退群向退出者发送 `groupRemoved(left)`、向剩余成员发送 `groupUpdated(member_left)`；WS 是单实例尽力通知，漏帧由 HTTP 群列表/详情/成员查询恢复。详见 `docs/GROUP_TRANSFER_LEAVE_TUTORIAL.md`。
 
-- [ ] **GROUP-005 (P2)**：解散群、成员上限与异常恢复。  
+- [x] **GROUP-005 (P2)**：解散群、成员上限与异常恢复。
   依赖：GROUP-004。验收：清理逻辑可重试；历史消息保留策略明确；大群扇出有压测数据。
+  已冻结规则：`DELETE /group/:groupID` 只认 `groups.owner_id`，在同一事务锁群、保存通知成员、写永久 `group_tombstones`、批量删除 `group_members`、删除 `groups` 并写 `group_members` 协调事件；群已不存在按期望状态幂等成功，只有墓碑 ID 会重试清缓存，随机 ID 不碰 Redis。`group_messages` 仅作服务端审计历史保留，当前不向解散后的原成员开放。默认上限 500，邀请继续用群行锁内 `COUNT + INSERT` 防并发超员。Reconciler 把成员正反向投影收敛为空并保留 0 人负缓存，只在确认群行消失后删除 `outbox/group_seq`；预热/巡检/重建同时枚举活动群和墓碑，消息授权先查墓碑，旧 Redis 快照不能复活权限。WS 向事务内快照成员发送 `groupRemoved(dissolved)`；前端以本次登录会话的 dissolved tombstone 拒绝晚到旧消息，漏帧在下次群列表刷新或重连时收敛。本机 500 人单实例扇出 5 次样本约 1.0～1.6 ms/轮。详见 `docs/GROUP_DISSOLVE_RECOVERY_TUTORIAL.md`。
 
 ## 5. WebSocket 与消息核心
 

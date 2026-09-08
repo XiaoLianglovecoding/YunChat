@@ -490,6 +490,7 @@ type fakeGroupRepository struct {
 	friendships                map[groupUserPair]bool
 	groups                     map[int64]model.Group
 	members                    map[groupMemberKey]model.GroupMember
+	tombstones                 map[int64]int64
 	reconcileCalls             []groupReconcileCall
 	nextGroupID                int64
 	nextMemberID               int64
@@ -497,6 +498,10 @@ type fakeGroupRepository struct {
 	mutationOutsideTransaction bool
 	addMemberErr               error
 	removeMemberErr            error
+	deleteMembersErr           error
+	deleteGroupErr             error
+	upsertTombstoneErr         error
+	tombstoneReadErr           error
 	updateOwnerErr             error
 	updateRoleErr              error
 	updateRoleErrForUser       map[int64]error
@@ -521,7 +526,8 @@ func newFakeGroupRepository(userIDs ...int64) *fakeGroupRepository {
 	repo := &fakeGroupRepository{
 		users: make(map[int64]bool), usernames: make(map[int64]string), avatars: make(map[int64]string),
 		friendships: make(map[groupUserPair]bool), groups: make(map[int64]model.Group),
-		members: make(map[groupMemberKey]model.GroupMember), nextGroupID: 100, nextMemberID: 1000,
+		members: make(map[groupMemberKey]model.GroupMember), tombstones: make(map[int64]int64),
+		nextGroupID: 100, nextMemberID: 1000,
 	}
 	for _, userID := range userIDs {
 		repo.users[userID] = true
@@ -533,13 +539,14 @@ func newFakeGroupRepository(userIDs ...int64) *fakeGroupRepository {
 func (r *fakeGroupRepository) WithinGroupTransaction(ctx context.Context, fn func(context.Context, repository.GroupRepository) error) error {
 	groupsBefore := cloneGroups(r.groups)
 	membersBefore := cloneGroupMembers(r.members)
+	tombstonesBefore := cloneGroupTombstones(r.tombstones)
 	reconcileBefore := append([]groupReconcileCall(nil), r.reconcileCalls...)
 	nextGroupBefore, nextMemberBefore := r.nextGroupID, r.nextMemberID
 	r.inTransaction = true
 	err := fn(ctx, r)
 	r.inTransaction = false
 	if err != nil {
-		r.groups, r.members, r.reconcileCalls = groupsBefore, membersBefore, reconcileBefore
+		r.groups, r.members, r.tombstones, r.reconcileCalls = groupsBefore, membersBefore, tombstonesBefore, reconcileBefore
 		r.nextGroupID, r.nextMemberID = nextGroupBefore, nextMemberBefore
 	}
 	return err
@@ -666,6 +673,48 @@ func (r *fakeGroupRepository) RemoveGroupMember(_ context.Context, groupID, user
 		return r.removeMemberErr
 	}
 	delete(r.members, groupMemberKey{groupID: groupID, userID: userID})
+	return nil
+}
+
+func (r *fakeGroupRepository) UpsertGroupTombstone(_ context.Context, groupID, ownerID int64) error {
+	r.markMutation()
+	if r.upsertTombstoneErr != nil {
+		return r.upsertTombstoneErr
+	}
+	r.tombstones[groupID] = ownerID
+	return nil
+}
+
+func (r *fakeGroupRepository) IsGroupTombstoned(_ context.Context, groupID int64) (bool, error) {
+	if r.tombstoneReadErr != nil {
+		return false, r.tombstoneReadErr
+	}
+	_, exists := r.tombstones[groupID]
+	return exists, nil
+}
+
+func (r *fakeGroupRepository) DeleteGroupMembers(_ context.Context, groupID int64) error {
+	r.markMutation()
+	if r.deleteMembersErr != nil {
+		return r.deleteMembersErr
+	}
+	for key := range r.members {
+		if key.groupID == groupID {
+			delete(r.members, key)
+		}
+	}
+	return nil
+}
+
+func (r *fakeGroupRepository) DeleteGroup(_ context.Context, groupID int64) error {
+	r.markMutation()
+	if r.deleteGroupErr != nil {
+		return r.deleteGroupErr
+	}
+	if _, exists := r.groups[groupID]; !exists {
+		return repository.ErrNotFound
+	}
+	delete(r.groups, groupID)
 	return nil
 }
 
@@ -822,6 +871,14 @@ func cloneGroupMembers(source map[groupMemberKey]model.GroupMember) map[groupMem
 	result := make(map[groupMemberKey]model.GroupMember, len(source))
 	for key, value := range source {
 		result[key] = value
+	}
+	return result
+}
+
+func cloneGroupTombstones(source map[int64]int64) map[int64]int64 {
+	result := make(map[int64]int64, len(source))
+	for groupID, ownerID := range source {
+		result[groupID] = ownerID
 	}
 	return result
 }

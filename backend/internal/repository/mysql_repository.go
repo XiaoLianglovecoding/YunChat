@@ -377,11 +377,12 @@ func (m *MySQLRepoImpl) IsBlocked(ctx context.Context, userID, blockedID int64) 
 // ── 群组基础 CRUD；GROUP-001 的事务与权限由窄 GroupRepository 编排 ──
 
 func (m *MySQLRepoImpl) CreateGroup(ctx context.Context, group *model.Group) (int64, error) {
-	query := "INSERT INTO `groups` (name, notice, owner_id, max_members, created_at, updated_at) VALUES (?, ?, ?, 500, NOW(), NOW())"
+	query := "INSERT INTO `groups` (name, notice, owner_id, max_members, created_at, updated_at) VALUES (?, ?, ?, ?, NOW(), NOW())"
 	result, err := m.db.ExecContext(ctx, query,
 		group.Name,
 		group.Notice,
 		group.OwnerID,
+		group.MaxMembers,
 	)
 	if err != nil {
 		return 0, fmt.Errorf("创建群组: %w", err)

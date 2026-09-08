@@ -29,6 +29,7 @@ type groupServiceStub struct {
 	muteMember   func(context.Context, int64, int64, int64, *time.Time) error
 	transfer     func(context.Context, int64, int64, int64) error
 	leave        func(context.Context, int64, int64) error
+	disband      func(context.Context, int64, int64) error
 }
 
 func (s groupServiceStub) Create(ctx context.Context, ownerID int64, name, notice string) (int64, error) {
@@ -73,6 +74,10 @@ func (s groupServiceStub) TransferOwnership(ctx context.Context, groupID, operat
 
 func (s groupServiceStub) Leave(ctx context.Context, groupID, userID int64) error {
 	return s.leave(ctx, groupID, userID)
+}
+
+func (s groupServiceStub) Disband(ctx context.Context, groupID, operatorID int64) error {
+	return s.disband(ctx, groupID, operatorID)
 }
 
 func TestGroupCreateReturnsCreatedGroupID(t *testing.T) {
@@ -506,6 +511,7 @@ func completeGroupStub() groupServiceStub {
 		muteMember: func(context.Context, int64, int64, int64, *time.Time) error { return nil },
 		transfer:   func(context.Context, int64, int64, int64) error { return nil },
 		leave:      func(context.Context, int64, int64) error { return nil },
+		disband:    func(context.Context, int64, int64) error { return nil },
 	}
 }
 

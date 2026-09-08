@@ -32,6 +32,7 @@ describe("friend realtime events", () => {
       syncCompleted: false,
       conversations: [],
       messagesByConversation: {},
+      dissolvedGroupIds: [],
       lastSyncTime: 0,
       lastSyncMsgId: 0,
     });

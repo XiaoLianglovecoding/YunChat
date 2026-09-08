@@ -17,11 +17,16 @@ import (
 type fakeCacheTruthRepository struct {
 	mu sync.Mutex
 
-	users   []int64
-	groups  []int64
-	friends map[int64][]int64
-	blocked map[int64][]int64
-	members map[int64][]model.GroupMember
+	users      []int64
+	groups     []int64
+	friends    map[int64][]int64
+	blocked    map[int64][]int64
+	members    map[int64][]model.GroupMember
+	tombstones map[int64]bool
+	// groupExists overrides the inferred fake state. Tests that model a
+	// disbanded group set an explicit false value.
+	groupExists      map[int64]bool
+	tombstoneReadErr error
 
 	friendReads map[int64]int
 	groupReads  map[int64]int
@@ -33,9 +38,19 @@ type fakeCacheTruthRepository struct {
 func newFakeCacheTruthRepository() *fakeCacheTruthRepository {
 	return &fakeCacheTruthRepository{
 		friends: make(map[int64][]int64), blocked: make(map[int64][]int64),
-		members: make(map[int64][]model.GroupMember), friendReads: make(map[int64]int),
-		groupReads: make(map[int64]int),
+		members: make(map[int64][]model.GroupMember), tombstones: make(map[int64]bool),
+		friendReads: make(map[int64]int),
+		groupExists: make(map[int64]bool), groupReads: make(map[int64]int),
 	}
+}
+
+func (f *fakeCacheTruthRepository) IsGroupTombstoned(_ context.Context, id int64) (bool, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if f.tombstoneReadErr != nil {
+		return false, f.tombstoneReadErr
+	}
+	return f.tombstones[id], nil
 }
 
 func (f *fakeCacheTruthRepository) EnqueueCacheReconcile(_ context.Context, resource repository.CacheResource, id int64) error {
@@ -90,6 +105,23 @@ func (f *fakeCacheTruthRepository) ListBlockedIDsForCache(_ context.Context, id 
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	return append([]int64(nil), f.blocked[id]...), nil
+}
+
+func (f *fakeCacheTruthRepository) GroupExistsForCache(_ context.Context, id int64) (bool, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if exists, specified := f.groupExists[id]; specified {
+		return exists, nil
+	}
+	for _, groupID := range f.groups {
+		if groupID == id {
+			return true, nil
+		}
+	}
+	// Several older unit tests seed only the authoritative member snapshot.
+	// Treat that as an active group unless a test explicitly says otherwise.
+	_, hasMemberSnapshot := f.members[id]
+	return hasMemberSnapshot, nil
 }
 
 func (f *fakeCacheTruthRepository) ListGroupMembersForCache(_ context.Context, id int64) ([]model.GroupMember, error) {
@@ -147,8 +179,11 @@ type fakeRelationshipCache struct {
 	locks                  map[string]string
 	lockAttempts           map[string]int
 	invalidations          []string
+	runtimeDeleteAttempts  []int64
+	operations             []string
 	replaceGate            chan struct{}
 	loadedErr              error
+	runtimeDeleteErr       error
 }
 
 func newFakeRelationshipCache() *fakeRelationshipCache {
@@ -257,7 +292,16 @@ func (f *fakeRelationshipCache) ReplaceGroupMembersOwner(_ context.Context, id i
 	f.missingGroupReverse[id] = nil
 	f.unexpectedGroupReverse[id] = nil
 	f.groupLoaded[id] = true
+	f.operations = append(f.operations, "replace-group:"+strconv.FormatInt(id, 10))
 	return nil
+}
+
+func (f *fakeRelationshipCache) DeleteDisbandedGroupRuntime(_ context.Context, id int64) error {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.runtimeDeleteAttempts = append(f.runtimeDeleteAttempts, id)
+	f.operations = append(f.operations, "delete-runtime:"+strconv.FormatInt(id, 10))
+	return f.runtimeDeleteErr
 }
 
 func (f *fakeRelationshipCache) ReadFriendSnapshot(_ context.Context, id int64) (repository.RelationshipCacheSnapshot, error) {
@@ -334,6 +378,161 @@ func TestEnsureGroupAccessPreventsConcurrentCacheBreakdown(t *testing.T) {
 	truth.mu.Lock()
 	defer truth.mu.Unlock()
 	require.Equal(t, 1, truth.groupReads[7], "only the lock owner may read MySQL")
+}
+
+func TestEnsureGroupAccessRejectsDissolvedGroupBeforeTrustingRestoredPositiveCache(t *testing.T) {
+	t.Parallel()
+	truth := newFakeCacheTruthRepository()
+	truth.tombstones[7] = true
+	truth.groupExists[7] = false
+	cache := newFakeRelationshipCache()
+	// Model a Redis backup taken before dissolution: Set + Hash cardinalities
+	// agree, so GroupMembersLoaded alone would incorrectly trust it.
+	cache.groupLoaded[7] = true
+	cache.members[7] = []model.GroupMember{{GroupID: 7, UserID: 11, Role: model.GroupRoleOwner}}
+	service := NewCacheTruthService(truth, cache, CacheTruthOptions{})
+
+	err := service.EnsureGroupAccess(context.Background(), 7)
+	require.ErrorIs(t, err, ErrGroupDissolved)
+
+	cache.mu.Lock()
+	defer cache.mu.Unlock()
+	require.Empty(t, cache.operations, "authorization must stop before trusting Redis or running Lua")
+	require.Empty(t, cache.lockAttempts)
+}
+
+func TestEnsureGroupAccessNeverExistingColdIDDoesNotPolluteRedis(t *testing.T) {
+	t.Parallel()
+	truth := newFakeCacheTruthRepository()
+	truth.groupExists[987654] = false
+	cache := newFakeRelationshipCache()
+	service := NewCacheTruthService(truth, cache, CacheTruthOptions{})
+
+	err := service.EnsureGroupAccess(context.Background(), 987654)
+	require.ErrorIs(t, err, ErrGroupDoesNotExist)
+
+	cache.mu.Lock()
+	defer cache.mu.Unlock()
+	require.Empty(t, cache.operations)
+	require.Empty(t, cache.lockAttempts, "random IDs must not acquire a lock that leads to owner-index SCAN")
+}
+
+func TestEnsureGroupAccessFailsClosedWhenTombstoneTruthIsUnavailable(t *testing.T) {
+	t.Parallel()
+	truth := newFakeCacheTruthRepository()
+	truth.tombstoneReadErr = errors.New("mysql unavailable")
+	cache := newFakeRelationshipCache()
+	cache.groupLoaded[7] = true
+	service := NewCacheTruthService(truth, cache, CacheTruthOptions{})
+
+	err := service.EnsureGroupAccess(context.Background(), 7)
+	require.Error(t, err)
+	var truthErr *CacheTruthError
+	require.ErrorAs(t, err, &truthErr)
+	require.Equal(t, "mysql", truthErr.Layer)
+	require.Contains(t, truthErr.Operation, "tombstone")
+}
+
+func TestBulkGroupOperationsIncludeDissolutionTombstones(t *testing.T) {
+	t.Parallel()
+	newState := func() (*fakeCacheTruthRepository, *fakeRelationshipCache, *CacheTruthService) {
+		truth := newFakeCacheTruthRepository()
+		// The fake's groups field models the repository's live+tombstone union.
+		truth.groups = []int64{7}
+		truth.tombstones[7] = true
+		truth.groupExists[7] = false
+		cache := newFakeRelationshipCache()
+		cache.groupLoaded[7] = true
+		cache.members[7] = []model.GroupMember{{GroupID: 7, UserID: 11}}
+		return truth, cache, NewCacheTruthService(truth, cache, CacheTruthOptions{})
+	}
+
+	t.Run("audit", func(t *testing.T) {
+		_, _, service := newState()
+		report, err := service.Audit(context.Background(), CacheScopeGroups)
+		require.NoError(t, err)
+		require.Equal(t, 1, report.Checked)
+		require.Equal(t, 1, report.Mismatches)
+		require.Equal(t, int64(7), report.Issues[0].OwnerID)
+	})
+
+	t.Run("warm", func(t *testing.T) {
+		_, cache, service := newState()
+		report, err := service.Warm(context.Background(), CacheScopeGroups)
+		require.NoError(t, err)
+		require.Equal(t, 1, report.Groups)
+		cache.mu.Lock()
+		defer cache.mu.Unlock()
+		require.Empty(t, cache.members[7])
+		require.Equal(t, []int64{7}, cache.runtimeDeleteAttempts)
+	})
+
+	t.Run("strict rebuild", func(t *testing.T) {
+		_, cache, service := newState()
+		report, err := service.Rebuild(context.Background(), CacheScopeGroups)
+		require.NoError(t, err)
+		require.Equal(t, 1, report.Groups)
+		cache.mu.Lock()
+		defer cache.mu.Unlock()
+		require.Equal(t, []string{"group_members:7"}, cache.invalidations)
+		require.Empty(t, cache.members[7])
+		require.Equal(t, []int64{7}, cache.runtimeDeleteAttempts)
+	})
+}
+
+func TestReconcileGroupMembersKeepsRuntimeForActiveEmptyGroup(t *testing.T) {
+	t.Parallel()
+	truth := newFakeCacheTruthRepository()
+	truth.groupExists[7] = true
+	truth.members[7] = []model.GroupMember{}
+	cache := newFakeRelationshipCache()
+	cache.members[7] = []model.GroupMember{{GroupID: 7, UserID: 11}}
+	service := NewCacheTruthService(truth, cache, CacheTruthOptions{})
+
+	require.NoError(t, service.ReconcileGroupMembers(context.Background(), 7))
+
+	cache.mu.Lock()
+	defer cache.mu.Unlock()
+	require.Empty(t, cache.members[7])
+	require.True(t, cache.groupLoaded[7], "an empty active projection still needs a loaded marker")
+	require.Empty(t, cache.runtimeDeleteAttempts, "zero members alone must not delete message runtime state")
+	require.Equal(t, []string{"replace-group:7"}, cache.operations)
+}
+
+func TestReconcileDeletedGroupRetriesRuntimeCleanupAfterProjectionReplacement(t *testing.T) {
+	t.Parallel()
+	truth := newFakeCacheTruthRepository()
+	truth.groupExists[7] = false
+	cache := newFakeRelationshipCache()
+	cache.members[7] = []model.GroupMember{{GroupID: 7, UserID: 11}}
+	cache.runtimeDeleteErr = errors.New("redis runtime cleanup unavailable")
+	service := NewCacheTruthService(truth, cache, CacheTruthOptions{})
+
+	err := service.ReconcileGroupMembers(context.Background(), 7)
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "delete disbanded group runtime")
+
+	cache.mu.Lock()
+	require.Empty(t, cache.members[7], "membership cleanup may finish before the later idempotent DEL fails")
+	require.True(t, cache.groupLoaded[7], "the fake models the real group_member_loaded=0 negative cache")
+	require.Equal(t, []int64{7}, cache.runtimeDeleteAttempts)
+	require.Equal(t, []string{"replace-group:7", "delete-runtime:7"}, cache.operations)
+	cache.runtimeDeleteErr = nil
+	cache.mu.Unlock()
+
+	// A durable worker retries the whole current-truth operation. Replacing an
+	// already-empty projection and deleting already/maybe-missing keys are both
+	// safe, so the second attempt converges without resurrecting the old member.
+	require.NoError(t, service.ReconcileGroupMembers(context.Background(), 7))
+
+	cache.mu.Lock()
+	defer cache.mu.Unlock()
+	require.Empty(t, cache.members[7])
+	require.Equal(t, []int64{7, 7}, cache.runtimeDeleteAttempts)
+	require.Equal(t, []string{
+		"replace-group:7", "delete-runtime:7",
+		"replace-group:7", "delete-runtime:7",
+	}, cache.operations)
 }
 
 func TestFriendFastPathWaitsForOldSnapshotThenRereadsLatestTruth(t *testing.T) {

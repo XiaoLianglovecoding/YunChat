@@ -306,7 +306,7 @@ $rotated = Invoke-RestMethod "$base/auth/refresh" -Method Post -ContentType 'app
 Invoke-RestMethod "$base/auth/refresh" -Method Post -ContentType 'application/json' -Body $refreshBody
 ```
 
-好友与 GROUP-001～004 群管理业务已经实现，所以带合法 access 请求 `/friend/list`、`/group/list`、`/group/:groupID/members`、转让群主或退群接口都会进入真实业务；无 Token 时仍应先返回 401。若要观察“鉴权成功后才进入 TODO”的行为，可改用尚未实现的消息或朋友圈接口。
+好友与 GROUP-001～005 群管理业务已经实现，所以带合法 access 请求 `/friend/list`、`/group/list`、`/group/:groupID/members`、转让、退群或解散接口都会进入真实业务；无 Token 时仍应先返回 401。若要观察“鉴权成功后才进入 TODO”的行为，可改用尚未实现的消息或朋友圈接口。
 
 ## 12. 测试怎么分层
 

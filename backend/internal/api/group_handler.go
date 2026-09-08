@@ -254,6 +254,22 @@ func (h *GroupHandler) Leave(c *gin.Context) {
 	WriteSuccess(c, http.StatusOK, nil)
 }
 
+func (h *GroupHandler) Disband(c *gin.Context) {
+	userID, ok := currentUserID(c)
+	if !ok {
+		return
+	}
+	groupID, ok := groupIDParam(c)
+	if !ok {
+		return
+	}
+	if err := h.groups.Disband(c.Request.Context(), groupID, userID); err != nil {
+		WriteError(c, err)
+		return
+	}
+	WriteSuccess(c, http.StatusOK, nil)
+}
+
 func groupIDParam(c *gin.Context) (int64, bool) {
 	return positivePathID(c, "groupID")
 }

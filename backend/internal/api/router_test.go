@@ -56,7 +56,7 @@ func TestPublicBusinessRouteReturnsTodo(t *testing.T) {
 }
 
 func TestBusinessRouteCountIncludesGroupLifecycleRoutes(t *testing.T) {
-	if got, want := len(BusinessRoutes()), 44; got != want {
+	if got, want := len(BusinessRoutes()), 45; got != want {
 		t.Fatalf("business route count = %d, want %d", got, want)
 	}
 }
@@ -111,7 +111,7 @@ func TestEveryProtectedRouteRequiresAuthorization(t *testing.T) {
 	}
 }
 
-func TestCompletedGroupRoutesReplaceTodoThroughGroup004(t *testing.T) {
+func TestCompletedGroupRoutesReplaceTodoThroughGroup005(t *testing.T) {
 	router, token := groupTestRouter(t, completeGroupStub())
 	for _, request := range []struct {
 		method string
@@ -126,6 +126,7 @@ func TestCompletedGroupRoutesReplaceTodoThroughGroup004(t *testing.T) {
 		{method: http.MethodDelete, path: "/api/v1/group/9/member/8/mute"},
 		{method: http.MethodPut, path: "/api/v1/group/9/owner", body: `{"new_owner_id":8}`},
 		{method: http.MethodPost, path: "/api/v1/group/9/leave"},
+		{method: http.MethodDelete, path: "/api/v1/group/9"},
 	} {
 		recorder := serveGroupRequest(router, token, request.method, request.path, request.body)
 		if recorder.Code != http.StatusOK {

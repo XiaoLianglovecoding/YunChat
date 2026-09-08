@@ -14,4 +14,5 @@ export const createGroupsApi = (client: GoIMApiClient) => ({
   unmuteMember: (groupId: ApiId, memberId: ApiId) => client.delete<void>(`/group/${groupId}/member/${memberId}/mute`),
   transferOwner: (groupId: ApiId, input: TransferGroupOwnerRequest) => client.put<void>(`/group/${groupId}/owner`, input),
   leave: (groupId: ApiId) => client.post<void>(`/group/${groupId}/leave`),
+  dissolve: (groupId: ApiId) => client.delete<void>(`/group/${groupId}`),
 });

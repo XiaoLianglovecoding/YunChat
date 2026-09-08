@@ -40,6 +40,11 @@ interface ChatState {
   syncCompleted: boolean;
   conversations: ChatConversation[];
   messagesByConversation: Record<string, ChatMessage[]>;
+  /**
+   * 本次登录会话中已经解散的群。群 ID 不复用，因此在退出登录前永久阻止
+   * 迟到的实时消息、离线同步或会话摘要把这些群重新创建出来。
+   */
+  dissolvedGroupIds: number[];
   lastSyncTime: number;
   lastSyncMsgId: number;
   initializePreview: () => void;
@@ -57,6 +62,7 @@ interface ChatState {
   applyConversationSync: (summaries: ConvSummary[], unreadMap: Record<string, number>) => void;
   revokeMessage: (convId: string, serverMsgId: number) => void;
   addGroupConversation: (groupId: number, name: string) => void;
+  markGroupDissolved: (groupId: number) => void;
   addPrivateConversation: (id: string, targetId: number, name: string, avatarUrl?: string) => void;
   setConversationMuted: (convId: string, muted: boolean) => void;
   removeConversation: (convId: string) => void;
@@ -129,18 +135,19 @@ export const useChatStore = create<ChatState>((set, get) => ({
   syncCompleted: false,
   conversations: [],
   messagesByConversation: {},
+  dissolvedGroupIds: [],
   lastSyncTime: 0,
   lastSyncMsgId: 0,
 
   initializePreview: () => {
     if (get().mode === "preview") return;
-    set({ mode: "preview", liveUserId: null, connectionState: "connected", syncCompleted: true, lastSyncTime: Date.now(), lastSyncMsgId: 0, ...previewState() });
+    set({ mode: "preview", liveUserId: null, connectionState: "connected", syncCompleted: true, dissolvedGroupIds: [], lastSyncTime: Date.now(), lastSyncMsgId: 0, ...previewState() });
   },
   initializeLive: (userId) => {
     if (get().mode === "live" && get().liveUserId === userId) return;
-    set({ mode: "live", liveUserId: userId, connectionState: "connecting", syncCompleted: false, conversations: [], messagesByConversation: {}, lastSyncTime: 0, lastSyncMsgId: 0 });
+    set({ mode: "live", liveUserId: userId, connectionState: "connecting", syncCompleted: false, conversations: [], messagesByConversation: {}, dissolvedGroupIds: [], lastSyncTime: 0, lastSyncMsgId: 0 });
   },
-  resetSession: () => set({ mode: null, liveUserId: null, connectionState: "idle", syncCompleted: false, conversations: [], messagesByConversation: {}, lastSyncTime: 0, lastSyncMsgId: 0 }),
+  resetSession: () => set({ mode: null, liveUserId: null, connectionState: "idle", syncCompleted: false, conversations: [], messagesByConversation: {}, dissolvedGroupIds: [], lastSyncTime: 0, lastSyncMsgId: 0 }),
   setConnectionState: (connectionState) => set({ connectionState }),
 
   sendText: (conversation, content, preview) => {
@@ -198,6 +205,7 @@ export const useChatStore = create<ChatState>((set, get) => ({
   }),
 
   receiveMessage: (message, currentUserId) => set((state) => {
+    if (message.convType === ConvType.Group && state.dissolvedGroupIds.includes(message.toId)) return state;
     const converted = serverMessageToChat(message, currentUserId);
     const current = state.messagesByConversation[message.convId] ?? [];
     const exists = current.some((item) => item.serverMsgId === message.msgId);
@@ -219,6 +227,7 @@ export const useChatStore = create<ChatState>((set, get) => ({
   applySyncBatch: (batch, currentUserId) => set((state) => {
     const next = { ...state.messagesByConversation };
     for (const message of batch.msgs) {
+      if (message.convType === ConvType.Group && state.dissolvedGroupIds.includes(message.toId)) continue;
       const converted = serverMessageToChat(message, currentUserId);
       next[message.convId] = mergeServerMessages(next[message.convId] ?? [], [converted]);
     }
@@ -231,7 +240,9 @@ export const useChatStore = create<ChatState>((set, get) => ({
 
   applyConversationSync: (summaries, unreadMap) => set((state) => ({
     syncCompleted: true,
-    conversations: [...summaries.map((summary) => ({
+    conversations: [...summaries
+      .filter((summary) => summary.convType !== ConvType.Group || !state.dissolvedGroupIds.includes(summary.targetId))
+      .map((summary) => ({
       id: summary.convId,
       name: summary.targetName || `会话 ${summary.targetId}`,
       preview: summary.lastMsg,
@@ -250,6 +261,7 @@ export const useChatStore = create<ChatState>((set, get) => ({
   })),
 
   addGroupConversation: (groupId, name) => set((state) => {
+    if (state.dissolvedGroupIds.includes(groupId)) return state;
     const id = state.mode === "preview" ? `preview-group-${groupId}` : `g_${groupId}`;
     if (state.conversations.some((conversation) => conversation.id === id)) {
       return { conversations: state.conversations.map((conversation) => conversation.id === id ? { ...conversation, name, targetId: groupId, convType: ConvType.Group, group: true } : conversation) };
@@ -257,6 +269,19 @@ export const useChatStore = create<ChatState>((set, get) => ({
     return {
       conversations: [{ id, name, preview: "群聊已创建", time: "刚刚", unread: 0, targetId: groupId, convType: ConvType.Group, group: true }, ...state.conversations],
       messagesByConversation: { ...state.messagesByConversation, [id]: [] },
+    };
+  }),
+  markGroupDissolved: (groupId) => set((state) => {
+    if (groupId <= 0) return state;
+    const convId = `g_${groupId}`;
+    const messagesByConversation = { ...state.messagesByConversation };
+    delete messagesByConversation[convId];
+    return {
+      dissolvedGroupIds: state.dissolvedGroupIds.includes(groupId)
+        ? state.dissolvedGroupIds
+        : [...state.dissolvedGroupIds, groupId],
+      conversations: state.conversations.filter((conversation) => !(conversation.group && conversation.targetId === groupId)),
+      messagesByConversation,
     };
   }),
   addPrivateConversation: (id, targetId, name, avatarUrl) => set((state) => {

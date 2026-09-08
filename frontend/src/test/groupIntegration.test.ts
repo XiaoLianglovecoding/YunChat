@@ -5,6 +5,7 @@ import { handleConnectionState, handleServerMessage, refreshGroupConversations }
 import { canManageGroupProfile } from "../features/groups/GroupManagement";
 import { groupsApi } from "../lib/api";
 import { queryClient } from "../lib/queryClient";
+import { goimSocket } from "../realtime/socket";
 import { useChatStore } from "../stores/chatStore";
 
 const group: Group = {
@@ -29,6 +30,7 @@ describe("group frontend integration", () => {
       syncCompleted: false,
       conversations: [],
       messagesByConversation: {},
+      dissolvedGroupIds: [],
       lastSyncTime: 0,
       lastSyncMsgId: 0,
     });
@@ -102,6 +104,46 @@ describe("group frontend integration", () => {
     expect(useChatStore.getState().conversations).toHaveLength(0);
     expect(queryClient.getQueryData(["group", 22])).toBeUndefined();
     expect(queryClient.getQueryData(["group-members", 22])).toBeUndefined();
+  });
+
+  it("removes local messages and group queries for every member after dissolution", () => {
+    useChatStore.getState().initializeLive(1);
+    useChatStore.getState().addGroupConversation(22, group.name);
+    queryClient.setQueryData(["group", 22], group);
+    queryClient.setQueryData(["group-members", 22], { items: [], total: 0 });
+    vi.spyOn(groupsApi, "list").mockResolvedValue([]);
+
+    handleServerMessage({
+      type: "groupRemoved",
+      data: { groupId: 22, reason: "dissolved" },
+    }, 1, () => undefined);
+
+    expect(useChatStore.getState().conversations).toHaveLength(0);
+    expect(useChatStore.getState().messagesByConversation.g_22).toBeUndefined();
+    expect(queryClient.getQueryData(["group", 22])).toBeUndefined();
+    expect(queryClient.getQueryData(["group-members", 22])).toBeUndefined();
+  });
+
+  it("acknowledges but never revives a dissolved group from a late message", () => {
+    useChatStore.getState().initializeLive(1);
+    useChatStore.getState().addGroupConversation(22, group.name);
+    vi.spyOn(groupsApi, "list").mockResolvedValue([]);
+    const getGroup = vi.spyOn(groupsApi, "get");
+    const send = vi.spyOn(goimSocket, "send").mockReturnValue(true);
+
+    handleServerMessage({
+      type: "groupRemoved",
+      data: { groupId: 22, reason: "dissolved" },
+    }, 1, () => undefined);
+    handleServerMessage({
+      type: "msg",
+      data: { msgId: 9001, convId: "g_22", convType: 2, fromId: 2, toId: 22, msgType: 1, content: "解散前在路上的消息", readStatus: 0, groupSeq: 8, timestamp: 205 },
+    }, 1, () => undefined);
+
+    expect(useChatStore.getState().conversations).toEqual([]);
+    expect(useChatStore.getState().messagesByConversation.g_22).toBeUndefined();
+    expect(getGroup).not.toHaveBeenCalled();
+    expect(send).toHaveBeenCalledWith({ type: "deliverAck", data: { serverMsgId: 9001 } });
   });
 
   it("prunes group conversations that are absent from an authoritative group-list refresh", async () => {

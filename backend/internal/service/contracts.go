@@ -92,15 +92,21 @@ type GroupLifecycleService interface {
 	Leave(context.Context, int64, int64) error
 }
 
-// GroupCoreService 汇总目前已经落地的 GROUP-001～GROUP-004。
+// GroupDisbandService 是 GROUP-005 的群解散用例边界。
+type GroupDisbandService interface {
+	Disband(context.Context, int64, int64) error
+}
+
+// GroupCoreService 汇总目前已经落地的 GROUP-001～GROUP-005。
 type GroupCoreService interface {
 	GroupProfileService
 	GroupMemberService
 	GroupMemberManagementService
 	GroupLifecycleService
+	GroupDisbandService
 }
 
-// GroupService 保留为群业务的完整入口；后续 GROUP-005 可以继续在这里扩展。
+// GroupService 保留为群业务的完整入口。
 type GroupService interface {
 	GroupCoreService
 }

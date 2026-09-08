@@ -7,7 +7,7 @@
 - 前端：React 19、TypeScript、Vite 8、Tailwind CSS、Zustand、TanStack Query。
 - 后端：Go 1.24、Gin 单体。
 - 数据组件：MySQL 8.4、Redis 7.2、RabbitMQ 3.13。
-- 原代码实际有 7 个 Service、4 个已实现 Consumer、13 张 MySQL 表；MyIM 另增用户消息状态表与缓存协调事件表。
+- 原代码实际有 7 个 Service、4 个已实现 Consumer、13 张 MySQL 表；MyIM 另增用户消息状态表、缓存协调事件表与群解散墓碑表。
 - 开发期前后端分离；生产镜像把 `frontend/dist` 交给 Gin 托管。
 
 ## 目标依赖方向
@@ -204,11 +204,29 @@ POST /group/:groupID/leave
 
 群主转让的 `owner_id`、旧角色和新角色必须一起提交，任何一步失败都回滚；新群主同时解除已有禁言，避免产生无人可以解禁的真实群主。Redis 与 WebSocket 都是提交后的投影/提示：Redis 失败由协调事件重试，WS 丢帧由 HTTP 群列表、详情和成员列表补偿。当前 Hub 仅推送本实例在线连接，不宣称跨实例可靠通知。完整说明见 `docs/GROUP_TRANSFER_LEAVE_TUTORIAL.md`。
 
+### 群解散、容量与异常恢复
+
+```text
+DELETE /group/:groupID
+  -> 锁 groups，权限只认 owner_id
+  -> 删除前读取成员 ID，供提交后 WS 扇出
+  -> 写永久 group_tombstones
+  -> 批量 DELETE group_members -> DELETE groups
+  -> 同事务写 group_members 协调事件
+  -> COMMIT 后快速清缓存，并发送 groupRemoved(dissolved)
+```
+
+DELETE 使用期望状态语义：群已不存在时返回成功，不重复写事件或通知；只有存在永久墓碑的真实解散重试才再次清缓存，从未存在的随机 ID 不触发 Redis 扫描或写负键。`group_messages` 不参与删除，只作为服务端审计历史保留；当前成员行已删除，因此不能据此承诺原成员仍可查看历史。
+
+成员上限默认 500，`AddMember` 继续在群行锁内执行 `COUNT + INSERT`。同群的邀请与解散也由这把锁串行，所以并发请求只能产生“邀请先完整提交再被解散”或“解散先提交、邀请看到 1302”两种结果。
+
+Reconciler 对已删除群读取空成员真相，原子清理成员 Set/Hash、`user_groups` 与反向索引，并保留 `group_member_loaded=0` 负缓存；只有再次确认群行不存在时才删除 `outbox/group_seq`，避免误清一个仍存在但成员异常为空的群。启动预热、巡检和重建会枚举活动群与永久墓碑；消息授权前还会先查墓碑，因此运行中切回旧 Redis 快照也不能复活已解散群权限。未来 MQ 消费者同样必须先检查墓碑，不能让晚到消息重建 `outbox`。本机 500 人单实例 WS 扇出 5 次样本约为 1.0～1.6 ms/轮；该结果是进程内编码/入队基线，不代表公网延迟。完整说明见 `docs/GROUP_DISSOLVE_RECOVERY_TUTORIAL.md`。
+
 启动预热调用 `CacheTruthService.Warm`，沿用有界 owner index；运维 `cachectl rebuild` 调用严格 `Rebuild`，会在资源锁内重置索引 marker，并通过增量 SCAN 清理索引外人工孤儿。这样日常请求不承担全库扫描成本，显式修复又能兑现审计结果。
 
 ## 当前安全策略
 
-- 注册、登录、刷新和公开头像读取无需 access token；其余 40 个业务路由统一经过 JWT 中间件。
+- 注册、登录、刷新和公开头像读取无需 access token；其余 41 个业务路由统一经过 JWT 中间件。
 - 未实现的受保护业务只有在鉴权成功后才返回结构化 501，缺失或无效 Token 先返回 401。
 - 登录对不存在用户执行 dummy bcrypt；客户端只看到统一的 1105，不泄露账号是否存在。
 - refresh token 在 Redis 一次性轮换；改名和改密会按用户索引撤销旧刷新会话。

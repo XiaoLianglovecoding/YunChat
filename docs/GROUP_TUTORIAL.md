@@ -220,7 +220,7 @@ HTTP 仍返回建群成功
 
 ## 8. 为什么要拆分群服务接口
 
-原来的 `GroupService` 同时声明了 GROUP-001～004 的全部方法。如果 Handler 直接依赖它，实现第一步时就被迫为成员邀请、角色、转让群主等未完成功能写假方法。
+原来的 `GroupService` 同时声明了多阶段的全部方法。如果 Handler 直接依赖它，实现第一步时就被迫为成员邀请、角色、转让或解散等未完成功能写假方法。
 
 [contracts.go](../backend/internal/service/contracts.go) 现在按已经落地的能力组合接口：
 
@@ -229,11 +229,12 @@ GroupProfileService       // GROUP-001 的四个资料用例
 GroupMemberService        // GROUP-002 的添加、移除、分页列表
 GroupMemberManagementService // GROUP-003 的管理员任免、禁言和解禁
 GroupLifecycleService     // GROUP-004 的转让群主和退群
-GroupCoreService          // 组合上面四组已完成接口，供 Router 使用
-GroupService              // 完整群业务入口，后续可继续扩展 GROUP-005
+GroupDisbandService       // GROUP-005 的解散群用例
+GroupCoreService          // 组合上面五组已完成接口，供 Router 使用
+GroupService              // 完整群业务入口
 ```
 
-这叫接口隔离：调用者只依赖它真正使用的能力。资料、成员、角色、禁言、转让和退群路由都已经改为真实 Handler；后续解散群仍留给 `GROUP-005`。
+这叫接口隔离：调用者只依赖它真正使用的能力。资料、成员、角色、禁言、转让、退群和解散路由都已经接入真实 Handler。GROUP-005 的事务、幂等和异常恢复详见 [GROUP_DISSOLVE_RECOVERY_TUTORIAL.md](GROUP_DISSOLVE_RECOVERY_TUTORIAL.md)。
 
 ## 9. 前端怎样接上这四个接口
 
@@ -243,7 +244,7 @@ GroupService              // 完整群业务入口，后续可继续扩展 GROUP
 2. 当前用户等于 `group.owner_id` 时始终被识别为真实群主；GROUP-002 又补上了完整成员分页，因此管理员权限也能从成员资料恢复。
 3. 改名成功会同步更新本地会话标题，不需要刷新页面。
 
-前端现在已经开放好友邀请、成员列表、成员移除、管理员任免、禁言、转让群主和退群；危险操作会先二次确认。转让成功会同步群主与成员角色，退群成功会清理群查询和本地会话。
+前端现在已经开放好友邀请、成员列表、成员移除、管理员任免、禁言、转让群主、退群和解散；危险操作会先二次确认。转让成功会同步群主与成员角色，退群或解散成功会清理群查询和本地会话。
 
 ## 10. 自己动手调用接口
 

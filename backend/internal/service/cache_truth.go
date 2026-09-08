@@ -32,6 +32,17 @@ func (scope CacheScope) Valid() bool {
 
 var ErrCacheWarmTimeout = errors.New("relationship cache warm-up timed out")
 
+// ErrGroupDissolved is returned before trusting any Redis membership marker.
+// Callers must stop before executing the group-message Lua script. This makes
+// authorization fail closed even while an asynchronously-started Warm pass is
+// still cleaning an older restored Redis snapshot.
+var ErrGroupDissolved = errors.New("group has been dissolved")
+
+// ErrGroupDoesNotExist prevents an arbitrary cold group ID from causing Redis
+// owner-index scans or permanent negative keys. Future message handlers should
+// map both group lifecycle sentinels to the frozen group authorization error.
+var ErrGroupDoesNotExist = errors.New("group does not exist")
+
 // CacheTruthError preserves whether a failure came from the durable truth or
 // Redis. Callers must return an error instead of interpreting a Redis failure as
 // “not friends” / “not blocked” / “not a group member”.
@@ -120,7 +131,30 @@ func (s *CacheTruthService) EnsureGroupAccess(ctx context.Context, groupID int64
 	if groupID <= 0 {
 		return errors.New("ensure group access: group ID must be positive")
 	}
-	return s.ensureLoaded(ctx, repository.CacheResourceGroupMembers, groupID)
+	tombstoned, err := s.truth.IsGroupTombstoned(ctx, groupID)
+	if err != nil {
+		return s.mysqlError("check group tombstone", repository.CacheResourceGroupMembers, groupID, err)
+	}
+	if tombstoned {
+		return ErrGroupDissolved
+	}
+	loaded, err := s.isLoaded(ctx, repository.CacheResourceGroupMembers, groupID)
+	if err != nil || loaded {
+		return err
+	}
+	// Only cold IDs need this second indexed lookup. Hot active groups keep the
+	// normal Redis fast path, while random never-existing IDs cannot trigger the
+	// legacy reverse-key discovery scan in ReplaceGroupMembersOwner.
+	exists, err := s.truth.GroupExistsForCache(ctx, groupID)
+	if err != nil {
+		return s.mysqlError("check cold group existence", repository.CacheResourceGroupMembers, groupID, err)
+	}
+	if !exists {
+		return ErrGroupDoesNotExist
+	}
+	return s.withResourceLock(ctx, repository.CacheResourceGroupMembers, groupID, "wait for cache warm-up", func() error {
+		return s.loadIfStillMissing(ctx, repository.CacheResourceGroupMembers, groupID)
+	})
 }
 
 // ReconcileGroupMembers 供群成员写操作在 MySQL 提交后立即刷新 Redis 投影。
@@ -210,12 +244,26 @@ func (s *CacheTruthService) reconcileCurrent(ctx context.Context, resource repos
 					return s.redisError("replace projection", resource, resourceID, err)
 				}
 			case repository.CacheResourceGroupMembers:
+				groupExists, err := snapshot.GroupExistsForCache(snapshotCtx, resourceID)
+				if err != nil {
+					return s.mysqlError("read authoritative group existence", resource, resourceID, err)
+				}
 				members, err := snapshot.ListGroupMembersForCache(snapshotCtx, resourceID)
 				if err != nil {
 					return s.mysqlError("read authoritative snapshot", resource, resourceID, err)
 				}
 				if err := s.cache.ReplaceGroupMembersOwner(snapshotCtx, resourceID, members); err != nil {
 					return s.redisError("replace projection", resource, resourceID, err)
+				}
+				// An empty member list alone is not proof of disbanding: an active
+				// but corrupt group may temporarily have no rows. Delete message
+				// runtime state only when the group row itself is gone. If this DEL
+				// fails, the durable event remains pending and safely retries both
+				// idempotent steps.
+				if !groupExists {
+					if err := s.cache.DeleteDisbandedGroupRuntime(snapshotCtx, resourceID); err != nil {
+						return s.redisError("delete disbanded group runtime", resource, resourceID, err)
+					}
 				}
 			}
 			return nil

@@ -9,16 +9,16 @@
 | React/Vite 前端 | 已复制 66 个源码、配置、测试和文档文件 |
 | Go 服务启动器 | 已装配 MySQL、Redis、RabbitMQ，默认监听 `18080` |
 | 健康检查 | `GET /health` 返回 200 |
-| 业务 HTTP 契约 | 原 42 个路由全部注册；GROUP-003 新增 2 个禁言路由，当前共 44 个 |
+| 业务 HTTP 契约 | 原 42 个路由全部注册；GROUP-003 新增 2 个禁言路由、GROUP-005 新增 1 个解散路由，当前共 45 个 |
 | WebSocket 入口 | 已实现 JWT 握手、单用户连接替换、心跳租约及单实例好友/在线/群变更事件；跨实例 fanout 与聊天帧分派待后续任务 |
 | 账户与鉴权 | 注册、登录、刷新轮换、修改用户名/密码已实现 |
 | 头像 | 安全上传、资料更新、公开读取与静态文件访问已实现 |
 | 好友 | 申请/分页、接受/拒绝、好友列表/删除、拉黑/解除及实时刷新已实现 |
 | 缓存真相 | MySQL 真相、启动预热、按需回源、事务协调事件、后台修复及 `cachectl` 巡检已实现 |
-| 群管理 | 建群/资料、成员增删分页、管理员任免/禁言、转让群主和退群已实现；解散群仍保留 TODO |
+| 群管理 | 建群/资料、成员增删分页、管理员任免/禁言、转让/退群、解散及异常恢复已实现 |
 | 其余业务逻辑 | 聊天消息、朋友圈和设置仍保留 `TODO[任务编号]` 占位 |
 | 受保护接口 | 全部经过真实 JWT 中间件；无效或缺失 Token 返回 401 |
-| MySQL | 版本化迁移、连接池、事务 Repository；13 张上游表 + 用户消息状态表 + 缓存协调事件表 |
+| MySQL | 版本化迁移、连接池、事务 Repository；13 张上游表 + 3 张 MyIM 状态/协调表（含群解散墓碑） |
 | Redis | 6 个单一来源 Lua；好友/黑名单/群成员投影可从 MySQL 重建；显式 noeviction；在线租约带连接所有权 |
 | RabbitMQ | 4 个实际队列、DLQ、Confirm、mandatory、超时与有限重试 |
 | 可观测性 | JSON 日志、Request ID、`/metrics`、本机 pprof |
@@ -42,7 +42,7 @@ my_IM/
 │   ├── cmd/server|migrate|cachectl/ # 服务、迁移与缓存重建/巡检命令
 │   ├── configs/                 # 本地、示例、Docker 配置
 │   ├── internal/
-│   │   ├── api/                 # HTTP Handler、44 个业务路由与剩余 TODO
+│   │   ├── api/                 # HTTP Handler、45 个业务路由与剩余 TODO
 │   │   ├── auth|middleware/     # JWT 签发、校验和身份注入
 │   │   ├── service/             # 账户、头像、好友、群管理与缓存真相用例
 │   │   ├── repository/          # MySQL、Redis、MQ 端口
@@ -51,8 +51,8 @@ my_IM/
 │   │   ├── ws|conn|consumer/    # 实时与异步模块边界
 │   │   └── infra|middleware/    # 基础设施与中间件
 │   └── scripts/
-│       ├── migrations/          # 001..012 可升级迁移
-│       └── baseline/            # 最终 15 张业务/协调表结构阅读基线
+│       ├── migrations/          # 001..013 可升级迁移
+│       └── baseline/            # 最终 16 张业务/协调表结构阅读基线
 ├── docs/
 ├── DEVELOPMENT_TASKS.md         # 按依赖顺序拆分的业务任务
 ├── docker-compose.yaml          # MySQL、Redis、RabbitMQ
@@ -89,7 +89,7 @@ Invoke-RestMethod 'http://localhost:18080/health'
 Invoke-RestMethod 'http://localhost:18080/api/v1/auth/register' -Method Post -ContentType 'application/json' -Body '{"username":"alice","password":"secret1"}'
 ```
 
-还可以执行 `Invoke-RestMethod 'http://localhost:18080/ready'`；三项依赖正常时返回 200。账户、头像和好友端点可真实使用；群组、消息、动态和设置端点通过鉴权后仍返回 501。
+还可以执行 `Invoke-RestMethod 'http://localhost:18080/ready'`；三项依赖正常时返回 200。账户、头像、好友和群管理端点可真实使用；消息、动态和设置端点通过鉴权后仍返回 501。
 
 ### 3. 启动前端
 
@@ -149,8 +149,9 @@ go run ./cmd/cachectl -c configs/config.local.yaml -action audit -scope all
 - [群成员管理小白教程](docs/GROUP_MEMBER_TUTORIAL.md)：好友邀请、移除权限、并发容量、分页与 Redis 正反向一致性。
 - [群角色与禁言小白教程](docs/GROUP_ROLE_MUTE_TUTORIAL.md)：管理员任免、禁言权限、完整缓存投影与群消息 Lua 校验。
 - [群主转让与退群小白教程](docs/GROUP_TRANSFER_LEAVE_TUTORIAL.md)：三处状态事务、群主退出约束、Redis 修复与 WS 刷新提示。
+- [群解散、上限与恢复小白教程](docs/GROUP_DISSOLVE_RECOVERY_TUTORIAL.md)：幂等解散、消息留存、并发容量、缓存异常恢复与 500 人扇出基准。
 - [架构说明](docs/ARCHITECTURE.md)：模块边界、目标数据流和源码/文档漂移。
-- [数据库与中间件契约](docs/DATABASE.md)：13 张表、Redis 键、MQ 队列和一致性风险。
+- [数据库与中间件契约](docs/DATABASE.md)：16 张业务/协调表、Redis 键、MQ 队列和一致性风险。
 - [前端复制与联调说明](docs/FRONTEND_COPY.md)：复制范围、环境变量和后端耦合点。
 - [前端 HTTP 类型](frontend/goim-api-types.ts) 与 [WebSocket 类型](frontend/goim-ws-types.ts) 是跨端契约的主要入口。
 

@@ -4,7 +4,7 @@ import { useChatStore } from "../stores/chatStore";
 describe("chat message state", () => {
   beforeEach(() => {
     vi.useFakeTimers();
-    useChatStore.setState({ mode: null, liveUserId: null, connectionState: "idle", syncCompleted: false, conversations: [], messagesByConversation: {}, lastSyncTime: 0, lastSyncMsgId: 0 });
+    useChatStore.setState({ mode: null, liveUserId: null, connectionState: "idle", syncCompleted: false, conversations: [], messagesByConversation: {}, dissolvedGroupIds: [], lastSyncTime: 0, lastSyncMsgId: 0 });
   });
 
   it("hydrates the preview conversations", () => {
@@ -94,5 +94,37 @@ describe("chat message state", () => {
     useChatStore.getState().removeConversation("g_22");
     expect(useChatStore.getState().conversations).toEqual([]);
     expect(useChatStore.getState().messagesByConversation["g_22"]).toBeUndefined();
+  });
+
+  it("blocks every hydration path for a dissolved group until the login session changes", () => {
+    const groupMessage = { msgId: 25, convId: "g_22", convType: 2 as const, fromId: 225, toId: 22, msgType: 1 as const, content: "late group message", readStatus: 0, groupSeq: 2, timestamp: 204 };
+    const groupSummary = { convId: "g_22", convType: 2 as const, targetId: 22, targetName: "已解散群", targetAvatar: "", lastMsg: "old", lastMsgTime: 204 };
+    useChatStore.getState().initializeLive(227);
+    useChatStore.getState().addGroupConversation(22, "待解散群");
+    useChatStore.getState().markGroupDissolved(22);
+
+    useChatStore.getState().receiveMessage(groupMessage, 227);
+    useChatStore.getState().applySyncBatch({ msgs: [groupMessage], hasMore: false, syncTime: 204, syncMsgId: 25 }, 227);
+    useChatStore.getState().applyConversationSync([groupSummary], { g_22: 1 });
+    useChatStore.getState().addGroupConversation(22, "不能复活的群");
+
+    expect(useChatStore.getState().dissolvedGroupIds).toEqual([22]);
+    expect(useChatStore.getState().conversations).toEqual([]);
+    expect(useChatStore.getState().messagesByConversation.g_22).toBeUndefined();
+    expect(useChatStore.getState().lastSyncMsgId).toBe(25);
+
+    // 私聊 targetId 即使与群 ID 相同，也不应被群 tombstone 误伤。
+    useChatStore.getState().receiveMessage({ ...groupMessage, msgId: 26, convId: "p_22_227", convType: 1, fromId: 22, toId: 227, groupSeq: undefined }, 227);
+    expect(useChatStore.getState().conversations).toHaveLength(1);
+
+    // 切换登录用户代表新的会话，旧用户的 tombstone 不能泄漏过去。
+    useChatStore.getState().initializeLive(228);
+    expect(useChatStore.getState().dissolvedGroupIds).toEqual([]);
+    useChatStore.getState().addGroupConversation(22, "另一用户仍可见的群");
+    expect(useChatStore.getState().conversations[0]).toMatchObject({ id: "g_22", targetId: 22 });
+
+    useChatStore.getState().markGroupDissolved(22);
+    useChatStore.getState().resetSession();
+    expect(useChatStore.getState().dissolvedGroupIds).toEqual([]);
   });
 });

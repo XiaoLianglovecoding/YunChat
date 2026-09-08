@@ -16,7 +16,7 @@
 | 移除成员 | `DELETE /api/v1/group/:groupID/member/:memberID` | 路径中的成员用户 ID | HTTP 200，省略 `data` |
 | 成员列表 | `GET /api/v1/group/:groupID/members` | `limit=20&offset=0` | 分页成员资料 |
 
-角色修改与禁言后来已经在 `GROUP-003` 完成，详见 [GROUP_ROLE_MUTE_TUTORIAL.md](GROUP_ROLE_MUTE_TUTORIAL.md)；退群和转让群主也已经在 `GROUP-004` 完成，详见 [GROUP_TRANSFER_LEAVE_TUTORIAL.md](GROUP_TRANSFER_LEAVE_TUTORIAL.md)。本篇继续只讲 GROUP-002 的边界。
+角色修改与禁言后来已经在 `GROUP-003` 完成，详见 [GROUP_ROLE_MUTE_TUTORIAL.md](GROUP_ROLE_MUTE_TUTORIAL.md)；退群和转让群主在 `GROUP-004` 完成，详见 [GROUP_TRANSFER_LEAVE_TUTORIAL.md](GROUP_TRANSFER_LEAVE_TUTORIAL.md)；并发容量验收与解散异常恢复在 `GROUP-005` 完成，详见 [GROUP_DISSOLVE_RECOVERY_TUTORIAL.md](GROUP_DISSOLVE_RECOVERY_TUTORIAL.md)。本篇继续只讲 GROUP-002 的边界。
 
 ## 1. 先把数据关系想清楚
 

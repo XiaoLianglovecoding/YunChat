@@ -377,6 +377,30 @@ func (r *RedisRepoImpl) ReplaceGroupMembersOwner(ctx context.Context, groupID in
 	return nil
 }
 
+// DeleteDisbandedGroupRuntime removes Redis-only message acceleration state
+// after MySQL has authoritatively reported that the group was hard-deleted.
+// DEL is naturally idempotent, so a failed fast path and any number of durable
+// reconciliation retries converge on the same result.
+//
+// The membership replacement intentionally runs separately and keeps
+// group_member_loaded:{gid}=0 plus the reverse-index loaded marker as a
+// negative cache. We also intentionally leave these unrelated projections to
+// their future message tasks:
+//   - msg_dedup:{sender}:{clientMsgID} has no group ID and already expires;
+//   - conv_list/unread/group_read_pos are per-user message-sync state.
+func (r *RedisRepoImpl) DeleteDisbandedGroupRuntime(ctx context.Context, groupID int64) error {
+	if groupID <= 0 {
+		return errors.New("delete disbanded group runtime: group ID must be positive")
+	}
+	if err := r.rdb.Del(ctx,
+		fmt.Sprintf("outbox:%d", groupID),
+		fmt.Sprintf("group_seq:%d", groupID),
+	).Err(); err != nil {
+		return fmt.Errorf("delete disbanded group %d runtime cache: %w", groupID, err)
+	}
+	return nil
+}
+
 func (r *RedisRepoImpl) ReadFriendSnapshot(ctx context.Context, userID int64) (RelationshipCacheSnapshot, error) {
 	loaded, err := r.FriendsLoaded(ctx, userID)
 	if err != nil {

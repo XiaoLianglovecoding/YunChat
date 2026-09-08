@@ -83,6 +83,12 @@ export function handleServerMessage(message: ServerWsMessage, currentUserId: num
       chat.acknowledge(message.data);
       break;
     case "msg":
+      if (message.data.convType === 2 && chat.dissolvedGroupIds.includes(message.data.toId)) {
+        // 已解散群的旧消息仍需确认送达，否则服务端会不断重投；但绝不能让
+        // 它进入消息仓库、触发通知或异步补全群资料并复活会话。
+        goimSocket.send({ type: "deliverAck", data: { serverMsgId: message.data.msgId } });
+        break;
+      }
       if (message.data.fromId !== currentUserId) {
         const conversation = chat.conversations.find((item) => item.id === message.data.convId);
         notifyIncomingMessage({ convId: message.data.convId, title: conversation?.name ?? (message.data.convType === 2 ? "群聊新消息" : "好友新消息"), content: message.data.content });
@@ -143,7 +149,8 @@ export function handleServerMessage(message: ServerWsMessage, currentUserId: num
       clearSession();
       break;
     case "groupRemoved":
-      chat.removeConversation(`g_${message.data.groupId}`);
+      if (message.data.reason === "dissolved") chat.markGroupDissolved(message.data.groupId);
+      else chat.removeConversation(`g_${message.data.groupId}`);
       removeGroupQueries(message.data.groupId);
       // Supersede a group-list request that may have started before this
       // removal frame; otherwise its stale response could recreate the chat.

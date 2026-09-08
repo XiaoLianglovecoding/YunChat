@@ -1,4 +1,4 @@
--- MyIM final schema reference after migrations 001..012.
+-- MyIM final schema reference after migrations 001..013.
 -- This file documents a clean install; the application executes scripts/migrations instead.
 CREATE TABLE users (
  id BIGINT PRIMARY KEY AUTO_INCREMENT, username VARCHAR(50) NOT NULL UNIQUE, password_hash VARCHAR(255) NOT NULL,
@@ -20,6 +20,11 @@ CREATE TABLE friendships (
 CREATE TABLE `groups` (
  id BIGINT PRIMARY KEY AUTO_INCREMENT, name VARCHAR(100) NOT NULL, notice VARCHAR(500) DEFAULT '', owner_id BIGINT NOT NULL, max_members INT NOT NULL DEFAULT 500,
  created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP, updated_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP, INDEX idx_owner(owner_id)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
+CREATE TABLE group_tombstones (
+ group_id BIGINT PRIMARY KEY, owner_id BIGINT NOT NULL, dissolved_at DATETIME(6) NOT NULL DEFAULT CURRENT_TIMESTAMP(6),
+ INDEX idx_group_tombstone_time(dissolved_at)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 
 CREATE TABLE group_members (

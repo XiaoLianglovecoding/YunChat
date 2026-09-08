@@ -64,6 +64,8 @@ JWT 至少要带 `user_id`、`username`、`exp`。否则前端解析出的用户
 
 `GROUP-004` 又同步了 `groupUpdated`，用于群主变化或成员退出后的群资料/成员 Query 失效；退出者的 `groupRemoved(reason=left)` 会移除群会话和相关 Query。首次连接和重连的权威 `/group/list` 刷新也会剔除已经不属于当前用户的陈旧群会话。
 
+`GROUP-005` 增加仅真实 `owner_id` 可见的解散入口和 `groupRemoved(reason=dissolved)`。群主确认解散后会关闭抽屉并清除会话、本地消息和群 Query；其他成员收到 WS 后执行同样清理。DELETE 重试按期望状态处理，旧的并发群列表响应会被 generation 丢弃；当前登录会话还会记录 dissolved 群 ID，拒绝晚到的实时 `msg`、`syncBatch`、`convSync` 和普通 addGroup 再次创建会话。
+
 私聊会话 ID 固定为 `p_{较小用户ID}_{较大用户ID}`，群聊固定为 `g_{groupID}`。
 
 ## 已知前端事项

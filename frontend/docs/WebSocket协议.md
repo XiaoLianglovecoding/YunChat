@@ -34,7 +34,7 @@
 | `friendAccepted` | `{ requestId, userId, friendId, username, avatarUrl? }` | 失效好友/申请 Query，并补齐私聊会话身份。|
 | `presence` | `{ userId, online }` | 更新好友与私聊会话的在线状态。|
 | `groupAdded` | `{ groupId, name }` | 增加群会话，并失效群资料/成员 Query；成员邀请 producer 尚待接入。|
-| `groupRemoved` | `{ groupId, reason: "removed" | "left" }` | 删除群会话及对应群 Query；当前 GROUP-004 发送 `left`，成员移除的 `removed` producer 尚待接入。|
+| `groupRemoved` | `{ groupId, reason: "removed" | "left" | "dissolved" }` | 删除群会话、本地消息及对应群 Query；`dissolved` 还写入当前登录会话的前端墓碑，晚到实时/同步群消息不能复活会话。GROUP-004 发送 `left`，GROUP-005 发送 `dissolved`，成员移除的 `removed` producer 尚待接入。|
 | `groupUpdated` | `{ groupId, reason: "owner_transferred" | "member_left" }` | 失效群资料与成员 Query，随后从 HTTP 权威数据刷新。|
 | `error` | `{ code, message }` | 将待发送消息标记失败；`4001~4003` 为私聊错误，`5001~5003` 为群聊错误。|
 | `kick` | `{ type, reason }` | 清除令牌、关闭连接并跳转登录。|
