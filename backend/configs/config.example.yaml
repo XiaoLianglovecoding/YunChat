@@ -28,6 +28,9 @@ mysql:
   conn_max_lifetime_ms: 300000
   conn_max_idle_time_ms: 60000
 
+message_id:
+  segment_size: 65536
+
 redis:
   addr: "localhost:16379"
   password: ""

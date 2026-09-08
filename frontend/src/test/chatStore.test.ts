@@ -44,6 +44,21 @@ describe("chat message state", () => {
     expect(useChatStore.getState().lastSyncMsgId).toBe(9);
   });
 
+  it("preserves the largest browser-safe server message ID", () => {
+    const maxMessageId = Number.MAX_SAFE_INTEGER;
+    const message = { msgId: maxMessageId, convId: "p_1_2", convType: 1 as const, fromId: 2, toId: 1, msgType: 1 as const, content: "exact", readStatus: 0, timestamp: 100 };
+    const wireCopy = JSON.parse(JSON.stringify(message)) as typeof message;
+
+    useChatStore.getState().initializeLive(1);
+    useChatStore.getState().applySyncBatch({ msgs: [wireCopy], hasMore: false, syncTime: 100, syncMsgId: maxMessageId }, 1);
+    useChatStore.getState().applySyncBatch({ msgs: [wireCopy], hasMore: false, syncTime: 100, syncMsgId: maxMessageId }, 1);
+
+    expect(wireCopy.msgId).toBe(maxMessageId);
+    expect(useChatStore.getState().messagesByConversation["p_1_2"]).toHaveLength(1);
+    expect(useChatStore.getState().messagesByConversation["p_1_2"][0].serverMsgId).toBe(maxMessageId);
+    expect(useChatStore.getState().lastSyncMsgId).toBe(maxMessageId);
+  });
+
   it("clears live messages when the authenticated user changes", () => {
     useChatStore.getState().initializeLive(1);
     useChatStore.getState().applySyncBatch({ msgs: [{ msgId: 10, convId: "p_1_2", convType: 1, fromId: 2, toId: 1, msgType: 1, content: "private", readStatus: 0, timestamp: 101 }], hasMore: false, syncTime: 101, syncMsgId: 10 }, 1);

@@ -13,6 +13,7 @@ import (
 
 	drivermysql "github.com/go-sql-driver/mysql"
 
+	"my-im/internal/messageid"
 	"my-im/internal/model"
 )
 
@@ -114,5 +115,29 @@ func TestWithinTransactionCommitAndRollback(t *testing.T) {
 	}
 	if fakeRollbacks.Load() == 0 {
 		t.Fatal("expected rollback")
+	}
+}
+
+func TestMessagePersistenceRejectsIDsOutsideBrowserSafeRange(t *testing.T) {
+	repo := NewMySQLRepository(fakeDB(t), time.Second, nil)
+	for _, id := range []int64{0, -1, messageid.MaxID + 1} {
+		if err := repo.InsertPrivateMessage(context.Background(), &model.PrivateMessage{ID: id}); err == nil {
+			t.Fatalf("private message ID %d unexpectedly accepted", id)
+		}
+		if err := repo.InsertGroupMessage(context.Background(), &model.GroupMessage{ID: id}); err == nil {
+			t.Fatalf("group message ID %d unexpectedly accepted", id)
+		}
+	}
+	if err := repo.InsertPrivateMessage(context.Background(), nil); err == nil {
+		t.Fatal("nil private message unexpectedly accepted")
+	}
+	if err := repo.InsertGroupMessage(context.Background(), nil); err == nil {
+		t.Fatal("nil group message unexpectedly accepted")
+	}
+	if err := repo.InsertPrivateMessage(context.Background(), &model.PrivateMessage{ID: messageid.MaxID}); err != nil {
+		t.Fatalf("browser-safe private message ID rejected: %v", err)
+	}
+	if err := repo.InsertGroupMessage(context.Background(), &model.GroupMessage{ID: messageid.MaxID}); err != nil {
+		t.Fatalf("browser-safe group message ID rejected: %v", err)
 	}
 }

@@ -3,10 +3,12 @@ package repository
 import (
 	"context"
 	"database/sql"
+	"errors"
 	"fmt"
 	"strings"
 	"time"
 
+	"my-im/internal/messageid"
 	"my-im/internal/model"
 )
 
@@ -35,6 +37,12 @@ func NewMySQLRepository(db *sql.DB, queryTimeout time.Duration, observer QueryOb
 // ── 消息 ──
 
 func (m *MySQLRepoImpl) InsertPrivateMessage(ctx context.Context, msg *model.PrivateMessage) error {
+	if msg == nil {
+		return errors.New("insert private message: message is nil")
+	}
+	if msg.ID < 1 || msg.ID > messageid.MaxID {
+		return fmt.Errorf("insert private message: ID must be between 1 and %d", messageid.MaxID)
+	}
 	query := `INSERT INTO private_messages (id, client_msg_id, sender_id, receiver_id, content, msg_type, created_at)
 	          VALUES (?, ?, ?, ?, ?, ?, ?)`
 	_, err := m.db.ExecContext(ctx, query,
@@ -53,6 +61,12 @@ func (m *MySQLRepoImpl) InsertPrivateMessage(ctx context.Context, msg *model.Pri
 }
 
 func (m *MySQLRepoImpl) InsertGroupMessage(ctx context.Context, msg *model.GroupMessage) error {
+	if msg == nil {
+		return errors.New("insert group message: message is nil")
+	}
+	if msg.ID < 1 || msg.ID > messageid.MaxID {
+		return fmt.Errorf("insert group message: ID must be between 1 and %d", messageid.MaxID)
+	}
 	query := `INSERT INTO group_messages (id, client_msg_id, group_id, sender_id, content, msg_type, group_seq, created_at)
 	          VALUES (?, ?, ?, ?, ?, ?, ?, ?)`
 	_, err := m.db.ExecContext(ctx, query,

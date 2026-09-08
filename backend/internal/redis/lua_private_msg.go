@@ -42,6 +42,7 @@ func MapLuaErrToClientCode(luaErrCode int) int {
 type PrivateMsgCheckResult struct {
 	ErrCode   int   // 0=正常, 1=不是好友, 2=被拉黑, 3=重复消息
 	MsgID     int64 // 分配的全局消息 ID（出错时为 0）
+	Timestamp int64 // Redis 服务器接收消息时的 Unix 毫秒
 	IsOnline  bool  // 接收者在线状态
 	IsFriend  bool  // 好友关系存在
 	IsBlocked bool  // 任意一方拉黑了另一方
@@ -51,58 +52,55 @@ const luaPrivateMsgCheck = `
 local senderID = KEYS[1]
 local receiverID = KEYS[2]
 local clientMsgID = KEYS[3]
+local msgID = tonumber(ARGV[1])
+
+-- Message IDs come from the durable MySQL segment generator. Redis must not
+-- maintain a second allocator because a restored snapshot could reuse IDs.
+if not msgID or msgID < 1 or msgID > 9007199254740991 or msgID ~= math.floor(msgID) then
+    return redis.error_reply('invalid externally allocated message ID')
+end
 
 -- 1. 好友关系检查（双向）
 local friend1 = redis.call('EXISTS', 'friend:' .. senderID .. ':' .. receiverID)
 local friend2 = redis.call('EXISTS', 'friend:' .. receiverID .. ':' .. senderID)
 if friend1 == 0 or friend2 == 0 then
-    return {1, 0, 0, 0, 0}
+    return {1, 0, 0, 0, 0, 0}
 end
 
 -- 2. 黑名单检查（任意方向拉黑都禁止私信）
 local blockedByReceiver = redis.call('SISMEMBER', 'blacklist:' .. receiverID, senderID)
 local blockedBySender = redis.call('SISMEMBER', 'blacklist:' .. senderID, receiverID)
 if blockedByReceiver == 1 or blockedBySender == 1 then
-    return {2, 0, 0, 1, 1}
+    return {2, 0, 0, 0, 1, 1}
 end
 
 -- 3. 消息去重
 local dedupKey = 'msg_dedup:' .. senderID .. ':' .. clientMsgID
 local dedup = redis.call('SET', dedupKey, '1', 'EX', 300, 'NX')
 if dedup == false then
-    return {3, 0, 0, 0, 0}
+    return {3, 0, 0, 0, 0, 0}
 end
 
 -- 4. 在线状态检查
 local isOnline = redis.call('EXISTS', 'online:' .. receiverID)
 
--- 5. 基于 Redis 服务器时间分配全局消息 ID。
--- 格式：Unix毫秒 * 1000 + 同毫秒序号（1..999），无需持久化全局计数器。
+-- 5. Timestamp is independent metadata; a message ID no longer encodes time.
 local redisTime = redis.call('TIME')
 local milliseconds = redisTime[1] * 1000 + math.floor(redisTime[2] / 1000)
-local sequenceKey = 'msg_id_seq:' .. milliseconds
-local sequence = redis.call('INCR', sequenceKey)
-if sequence == 1 then
-    redis.call('EXPIRE', sequenceKey, 2)
-end
-if sequence > 999 then
-    return redis.error_reply('message ID sequence overflow')
-end
-local msgID = milliseconds * 1000 + sequence
 
-return {0, msgID, isOnline, 1, 0}
+return {0, msgID, milliseconds, isOnline, 1, 0}
 `
 
 // ExecPrivateMsgCheck 原子性地检查好友关系、黑名单、消息去重、
-// 分配消息 ID 并检查在线状态——所有这些操作都在单次
+// 接收外部分配的消息 ID 并检查在线状态——所有这些操作都在单次
 // Redis Lua 脚本执行中完成，以避免竞态条件。
-func ExecPrivateMsgCheck(rdb *goredis.Client, ctx context.Context, senderID, receiverID int64, clientMsgID string) (*PrivateMsgCheckResult, error) {
+func ExecPrivateMsgCheck(rdb *goredis.Client, ctx context.Context, senderID, receiverID int64, clientMsgID string, messageID int64) (*PrivateMsgCheckResult, error) {
 	keys := []string{
 		strconv.FormatInt(senderID, 10),
 		strconv.FormatInt(receiverID, 10),
 		clientMsgID,
 	}
-	result, err := runScript("private_msg_check", rdb, ctx, keys).Slice()
+	result, err := runScript("private_msg_check", rdb, ctx, keys, messageID).Slice()
 	if err != nil {
 		return nil, err
 	}
@@ -110,9 +108,10 @@ func ExecPrivateMsgCheck(rdb *goredis.Client, ctx context.Context, senderID, rec
 	res := &PrivateMsgCheckResult{}
 	res.ErrCode = int(result[0].(int64))
 	res.MsgID = result[1].(int64)
-	res.IsOnline = result[2].(int64) == 1
-	res.IsFriend = result[3].(int64) == 1
-	res.IsBlocked = result[4].(int64) == 1
+	res.Timestamp = result[2].(int64)
+	res.IsOnline = result[3].(int64) == 1
+	res.IsFriend = result[4].(int64) == 1
+	res.IsBlocked = result[5].(int64) == 1
 
 	return res, nil
 }

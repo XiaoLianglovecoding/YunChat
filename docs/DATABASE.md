@@ -2,7 +2,7 @@
 
 本文件记录从 `E:\IT\IM` 实际迁移、Repository、Lua 和 Consumer 代码审计出的事实。业务实现时以本文件和 `backend/scripts/migrations` 为基线，不以旧设计文档中的示例键名为准。
 
-## MySQL：13 张上游表 + 3 张 MyIM 表
+## MySQL：13 张上游表 + 4 张 MyIM 表
 
 | 表 | 主键与关键字段 | 现有索引/约束 | 业务备注 |
 | --- | --- | --- | --- |
@@ -12,8 +12,9 @@
 | `groups` | name、owner_id、max_members | idx_owner | owner 与成员 role=2 双份表达 |
 | `group_tombstones` | group_id、原 owner_id、dissolved_at | group_id PRIMARY、解散时间索引 | 永久记录已解散 ID，防旧 Redis 快照恢复成员权限；不保存可展示群资料 |
 | `group_members` | group/user、role、muted_until | group-user UNIQUE、group/user 索引 | role：0 成员、1 管理员、2 群主 |
-| `private_messages` | Redis 生成 ID、client_msg_id、sender/receiver、content | sender-client UNIQUE、会话/接收方时间、FULLTEXT | client_msg_id 为空时兼容历史消息 |
-| `group_messages` | Redis 生成 ID、client_msg_id、group_seq | sender-client、group-seq UNIQUE；group-time、FULLTEXT | group-seq 可从持久层恢复 |
+| `message_id_allocators` | namespace、next_id、updated_at | namespace PRIMARY、`next_id <= 2^53` CHECK | MySQL 事务预留全局互斥号段；`message` 同时服务私聊和群聊 |
+| `private_messages` | 统一生成器 ID、client_msg_id、sender/receiver、content | ID 安全整数 CHECK、sender-client UNIQUE、会话/接收方时间、FULLTEXT | client_msg_id 为空时兼容历史消息 |
+| `group_messages` | 统一生成器 ID、client_msg_id、group_seq | ID 安全整数 CHECK、sender-client、group-seq UNIQUE；group-time、FULLTEXT | group-seq 可从持久层恢复 |
 | `msg_revoked` | 自增 ID、msg_id、conv_id、operator | conv-msg UNIQUE、idx_msg | 多态关联，唯一键保证撤回幂等 |
 | `moments` | author、content、JSON media、visibility | author-time、time | 默认 2；历史值 1 在 011 中升级为 2 |
 | `moment_likes` | moment/user | pair UNIQUE、idx_moment | 唯一键支持异步幂等写 |
@@ -47,7 +48,7 @@
 
 ## 迁移现状
 
-当前完整保留上游 9 个文件，并追加 011、012、013：
+当前完整保留上游 9 个文件，并追加 011、012、013、014：
 
 ```text
 001_create_users.sql
@@ -62,6 +63,7 @@
 011_foundation_schema.sql
 012_cache_truth.sql
 013_group_tombstones.sql
+014_message_id_allocator.sql
 ```
 
 注意：
@@ -70,7 +72,7 @@
 - 005 已把 `moment_comments.id` 建为自增，009 和 010 又重复修正，属于历史补丁。
 - Docker 不再挂载 `/docker-entrypoint-initdb.d`；服务启动和 `cmd/migrate` 共用同一个迁移器。
 - `CREATE TABLE IF NOT EXISTS` 不会把旧表升级到新字段定义。
-- 当前 DDL 没有逐表声明 Engine/charset，依赖 Compose 的服务器默认值。
+- 早期上游 DDL 没有逐表声明 Engine/charset，依赖 Compose 默认值；MyIM 新增表已显式声明 InnoDB/utf8mb4。
 
 迁移器使用 `schema_migrations`、SHA-256 校验和与 dirty 标记，提供 `up/status`。最终阅读基线位于 `backend/scripts/baseline/000_final_schema.sql`，但实际升级始终走历史迁移。
 
@@ -94,6 +96,16 @@
 - 群 ID 使用自增且不复用；墓碑是永久的“这个 ID 已解散”事实，不随普通协调事件完成而删除。
 - 启动预热、`cachectl audit/rebuild` 枚举活动群与墓碑的并集，因此 Redis 恢复旧快照后仍能发现并清空旧成员投影。
 - 群消息授权前先查询主键墓碑；这多一次很小的 MySQL 点查，换来运行中 Redis 回滚时也不会信任旧的正缓存。以后若优化，必须用可证明等价的版本机制，不能直接删掉这次校验。
+
+## 已在 014 完成的消息 ID 高水位
+
+- 新增 `message_id_allocators`，`next_id` 表示尚未预留的第一个 ID。
+- 升级时从私聊、群聊、撤回记录和用户消息状态引用的历史最大 ID 之后开始，不覆盖已有编号。
+- 多实例通过 `SELECT ... FOR UPDATE` 串行预留互不相交的号段；提交后才允许使用，未用完的号段永不回收。
+- 消息 ID 上限为 `9,007,199,254,740,991`，保证当前 TypeScript `number`/JSON 数字契约精确。
+- 两张消息表也增加同一安全范围 CHECK，Repository 在执行 SQL 前再次拒绝 nil、非正数和越界 ID，防止未来 Consumer 绕开生成器写入坏值。
+- allocator 行丢失时生成器失败关闭，禁止根据消息表 `MAX(id)` 在线重建，因为 MQ 中可能还有已发号但未落库的消息。
+- 旧、新发号算法没有共同协调点；已有旧消息生产者的升级必须停写、排空旧 MQ、确认持久化、执行 014 后再只启动新版本，禁止滚动混跑。当前聊天发送尚未实现，首次启用不存在这段兼容窗口。
 
 仍留给业务任务决定：
 
@@ -124,7 +136,6 @@
 | `refresh:{jti}` | Hash，TTL=令牌寿命 | 刷新令牌 family、用户、到期时间 |
 | `refresh_user:{uid}` | Set，TTL | 用户的 refresh jti 索引，用于改密/登出全部撤销 |
 | `msg_dedup:{sender}:{clientMsgID}` | String，TTL 300s | 客户端消息去重 |
-| `msg_id_seq:{millis}` | Counter，TTL 2s | 同一毫秒内 ID 序号 |
 | `group_seq:{gid}` | Counter | 群消息序号 |
 | `online:{uid}` / `conn:{uid}` | String，TTL 60s | 值为 connectionID；续租、删除都先比较所有权 |
 | `timeline:{uid}` | ZSet | 动态收件箱 |
@@ -155,13 +166,13 @@ GROUP-005 解散群先锁 `groups` 并只认真实 `owner_id`，删除前保存�
 
 好友重建只替换 `friend:{owner}:*`，不会擅自删除另一用户拥有的方向；群成员重建会同时维护 Set、Hash、`user_groups` 和有界 owner index，不在 Lua 中运行全库 `KEYS`。
 
-调用私聊 Lua 前必须先执行 `CacheTruthService.EnsurePrivateAccess(sender, receiver)`；调用群聊 Lua 前执行 `EnsureGroupAccess(groupID)`。因此清空 Redis 后的第一次请求会回源，而不是把“key 不存在”误判成业务关系不存在。
+调用私聊 Lua 前必须先执行 `CacheTruthService.EnsurePrivateAccess(sender, receiver)`；调用群聊 Lua 前执行 `EnsureGroupAccess(groupID)`。统一生成器先从 MySQL 持久号段取得候选 ID，再把它传给 Lua；Lua 独立返回 Redis 毫秒时间。因此清空 Redis 后的第一次请求会回源，但不会重置或复用消息 ID。
 
 本项目把 Redis 开为 AOF 并显式使用 `noeviction`，但 AOF 不能替代上述重建逻辑。好友/黑名单 loaded marker 能识别整组 key 丢失；群成员 marker 还会比较 Set、Hash 与预期人数，因此单边删除成员或 Hash field 时，下一次 `EnsureGroupAccess` 会自动回源。同基数的错误替换、JSON 内容损坏或反向关系漂移仍由 `cachectl audit` 报告，再用严格 `rebuild` 修复。只损坏内部 owner index、业务投影仍正确时未必形成 audit mismatch，但严格重建仍会主动重建该索引：它在同资源锁内清除 loaded/index marker，使下一次替换执行增量 SCAN。启动预热与在线 fast path 不这样做，仍保持与单个 owner 关系数量成正比。
 
 刷新令牌已采用一次性轮换：服务验证 JWT 后用 Redis `WATCH` 检查 `refresh:{oldJTI}`，在同一事务中删除旧会话和用户索引成员，再写入同一 family 的新 JTI。两个并发刷新只有一个能提交，另一个映射为业务码 1106。修改密码会先按 `refresh_user:{uid}` 撤销全部刷新会话，再更新 bcrypt 哈希，避免 Redis 故障时留下仍有效的旧刷新令牌。
 
-上游消息 ID 算法为 `Unix毫秒 * 1000 + 同毫秒 INCR`。当单实例在同一毫秒分配超过 1000 个 ID 时，会与下一毫秒编号区间碰撞；多实例、时钟回拨和 Redis 丢失也没有完整证明。`MSG-000` 必须先选择新的全局 ID 方案，再实现私聊/群聊 Lua。
+MSG-000 已把上游 `Unix毫秒 * 1000 + 同毫秒 INCR` 替换为“MySQL 持久高水位 + 实例内号段”。消息 ID 只保证全局唯一，不编码时间、不保证跨实例按发送时间递增；时间使用 Lua 返回的 Redis `TIME`。`group_seq` 当前只保证同一 Redis 有效状态内的单群原子递增，跨恢复由 MSG-007 补齐。完整证明、边界、故障分析与接缝测试见 `docs/MESSAGE_ID_TUTORIAL.md`。
 
 ## RabbitMQ：4 个持久主队列 + 各自 DLQ
 

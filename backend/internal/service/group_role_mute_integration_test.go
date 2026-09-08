@@ -91,7 +91,7 @@ func TestGroupRoleMuteDockerIntegration(t *testing.T) {
 	peerAdminID = insertGroupRoleMuteITUser(t, ctx, db, fmt.Sprintf("group_role_peer_admin_%d", stamp))
 
 	mysqlRepo := repository.NewMySQLRepo(db)
-	redisRepo := repository.NewRedisRepo(redisClient)
+	redisRepo := repository.NewRedisRepo(redisClient, repository.WithMessageIDGenerator(&serviceTestMessageIDs{}))
 	cacheTruth := NewCacheTruthService(mysqlRepo, redisRepo, CacheTruthOptions{})
 	groups, err := NewGroupService(mysqlRepo, WithGroupCache(cacheTruth))
 	require.NoError(t, err)
@@ -140,7 +140,7 @@ func TestGroupRoleMuteDockerIntegration(t *testing.T) {
 
 	// The raw Lua result is 2, while the repository contract maps that rule to
 	// public code 5002. Rejection happens before dedup and sequence allocation.
-	rawResult, err := redisscripts.ExecGroupMsgCheck(redisClient, ctx, groupID, targetID, mutedClientMsgID)
+	rawResult, err := redisscripts.ExecGroupMsgCheck(redisClient, ctx, groupID, targetID, mutedClientMsgID, 1)
 	require.NoError(t, err)
 	require.Equal(t, redisscripts.GMErrMuted, rawResult.ErrCode)
 	wrappedResult, err := redisRepo.ExecGroupMsgCheck(ctx, groupID, targetID, mutedClientMsgID)

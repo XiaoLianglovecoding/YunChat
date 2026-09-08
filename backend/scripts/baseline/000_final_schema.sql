@@ -1,4 +1,4 @@
--- MyIM final schema reference after migrations 001..013.
+-- MyIM final schema reference after migrations 001..014.
 -- This file documents a clean install; the application executes scripts/migrations instead.
 CREATE TABLE users (
  id BIGINT PRIMARY KEY AUTO_INCREMENT, username VARCHAR(50) NOT NULL UNIQUE, password_hash VARCHAR(255) NOT NULL,
@@ -32,16 +32,26 @@ CREATE TABLE group_members (
  joined_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP, UNIQUE KEY uk_group_user(group_id,user_id), INDEX idx_user(user_id)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 
+CREATE TABLE message_id_allocators (
+ namespace VARCHAR(64) PRIMARY KEY, next_id BIGINT NOT NULL,
+ updated_at DATETIME(6) NOT NULL DEFAULT CURRENT_TIMESTAMP(6) ON UPDATE CURRENT_TIMESTAMP(6),
+ CONSTRAINT chk_message_id_next CHECK(next_id BETWEEN 1 AND 9007199254740992)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
+INSERT INTO message_id_allocators(namespace,next_id) VALUES('message',1);
+
 CREATE TABLE private_messages (
  id BIGINT PRIMARY KEY, client_msg_id VARCHAR(64) NULL, sender_id BIGINT NOT NULL, receiver_id BIGINT NOT NULL, content TEXT NOT NULL,
  msg_type TINYINT NOT NULL DEFAULT 1, created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
- UNIQUE KEY uk_private_sender_client(sender_id,client_msg_id), INDEX idx_conv_time(sender_id,receiver_id,created_at), INDEX idx_receiver_time(receiver_id,created_at), FULLTEXT INDEX ft_content(content)
+ UNIQUE KEY uk_private_sender_client(sender_id,client_msg_id), INDEX idx_conv_time(sender_id,receiver_id,created_at), INDEX idx_receiver_time(receiver_id,created_at), FULLTEXT INDEX ft_content(content),
+ CONSTRAINT chk_private_message_id CHECK(id BETWEEN 1 AND 9007199254740991)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 
 CREATE TABLE group_messages (
  id BIGINT PRIMARY KEY, client_msg_id VARCHAR(64) NULL, group_id BIGINT NOT NULL, sender_id BIGINT NOT NULL, content TEXT NOT NULL, msg_type TINYINT NOT NULL DEFAULT 1,
  group_seq BIGINT NOT NULL, created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
- UNIQUE KEY uk_group_sender_client(sender_id,client_msg_id), UNIQUE KEY uk_group_sequence(group_id,group_seq), INDEX idx_group_time(group_id,created_at), FULLTEXT INDEX ft_content(content)
+ UNIQUE KEY uk_group_sender_client(sender_id,client_msg_id), UNIQUE KEY uk_group_sequence(group_id,group_seq), INDEX idx_group_time(group_id,created_at), FULLTEXT INDEX ft_content(content),
+ CONSTRAINT chk_group_message_id CHECK(id BETWEEN 1 AND 9007199254740991)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 
 CREATE TABLE msg_revoked (

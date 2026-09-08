@@ -60,7 +60,7 @@ func TestFriendHTTPIntegration(t *testing.T) {
 	defer redisClient.Close()
 
 	mysqlRepo := repository.NewMySQLRepository(db, 3*time.Second, nil)
-	redisRepo := repository.NewRedisRepo(redisClient)
+	redisRepo := repository.NewRedisRepo(redisClient, repository.WithMessageIDGenerator(&apiTestMessageIDs{}))
 	tokens, err := authtoken.NewManager(
 		"0123456789abcdef0123456789abcdef", "my-im-friend-integration", time.Hour, 24*time.Hour,
 	)

@@ -92,7 +92,7 @@ func TestCacheTruthDockerIntegration(t *testing.T) {
 	require.NoError(t, redisClient.Del(ctx, cleanupKeys...).Err()) // simulate relationship-cache loss
 
 	mysqlRepo := repository.NewMySQLRepo(db)
-	redisRepo := repository.NewRedisRepo(redisClient)
+	redisRepo := repository.NewRedisRepo(redisClient, repository.WithMessageIDGenerator(&serviceTestMessageIDs{}))
 	cacheTruth := NewCacheTruthService(mysqlRepo, redisRepo, CacheTruthOptions{})
 	require.NoError(t, cacheTruth.EnsurePrivateAccess(ctx, userA, userB))
 	require.NoError(t, cacheTruth.EnsureGroupAccess(ctx, groupID))

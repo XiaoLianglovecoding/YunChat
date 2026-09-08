@@ -22,18 +22,39 @@ func TestLoadAppliesInfrastructureDefaults(t *testing.T) {
 	if cfg.Observability.MetricsPath != "/metrics" {
 		t.Fatalf("metrics path = %q", cfg.Observability.MetricsPath)
 	}
+	if cfg.MessageID.SegmentSize != 65_536 {
+		t.Fatalf("message ID segment size = %d", cfg.MessageID.SegmentSize)
+	}
 }
 
 func TestValidateRejectsWeakJWTSecret(t *testing.T) {
-	cfg := Config{App: AppConfig{Name: "my-im"}, MySQL: MySQLConfig{Host: "h", User: "u", DBName: "d", MaxOpenConns: 2, MaxIdleConns: 1}, Redis: RedisConfig{Addr: "r"}, RabbitMQ: RabbitMQConfig{URL: "amqp://x"}, Server: ServerConfig{WSPath: "/ws"}, Observability: ObservabilityConfig{MetricsPath: "/metrics"}, JWT: JWTConfig{Secret: "too-short", Issuer: "my-im"}}
+	cfg := Config{App: AppConfig{Name: "my-im"}, MySQL: MySQLConfig{Host: "h", User: "u", DBName: "d", MaxOpenConns: 2, MaxIdleConns: 1}, MessageID: MessageIDConfig{SegmentSize: 65_536}, Redis: RedisConfig{Addr: "r"}, RabbitMQ: RabbitMQConfig{URL: "amqp://x"}, Server: ServerConfig{WSPath: "/ws"}, Observability: ObservabilityConfig{MetricsPath: "/metrics"}, JWT: JWTConfig{Secret: "too-short", Issuer: "my-im"}}
 	if err := cfg.Validate(); err == nil {
 		t.Fatal("expected weak JWT secret validation error")
 	}
 }
 
 func TestValidateRejectsOversizedIdlePool(t *testing.T) {
-	cfg := Config{App: AppConfig{Name: "my-im"}, MySQL: MySQLConfig{Host: "h", User: "u", DBName: "d", MaxOpenConns: 1, MaxIdleConns: 2}, Redis: RedisConfig{Addr: "r"}, RabbitMQ: RabbitMQConfig{URL: "amqp://x"}, Server: ServerConfig{WSPath: "/ws"}, Observability: ObservabilityConfig{MetricsPath: "/metrics"}}
+	cfg := Config{App: AppConfig{Name: "my-im"}, MySQL: MySQLConfig{Host: "h", User: "u", DBName: "d", MaxOpenConns: 1, MaxIdleConns: 2}, MessageID: MessageIDConfig{SegmentSize: 65_536}, Redis: RedisConfig{Addr: "r"}, RabbitMQ: RabbitMQConfig{URL: "amqp://x"}, Server: ServerConfig{WSPath: "/ws"}, Observability: ObservabilityConfig{MetricsPath: "/metrics"}}
 	if err := cfg.Validate(); err == nil {
 		t.Fatal("expected validation error")
+	}
+}
+
+func TestValidateRejectsOversizedMessageIDSegment(t *testing.T) {
+	cfg := Config{App: AppConfig{Name: "my-im"}, MySQL: MySQLConfig{Host: "h", User: "u", DBName: "d", MaxOpenConns: 2, MaxIdleConns: 1}, MessageID: MessageIDConfig{SegmentSize: 1_000_001}, Redis: RedisConfig{Addr: "r"}, RabbitMQ: RabbitMQConfig{URL: "amqp://x"}, Server: ServerConfig{WSPath: "/ws"}, Observability: ObservabilityConfig{MetricsPath: "/metrics"}, JWT: JWTConfig{Secret: "0123456789abcdef0123456789abcdef", Issuer: "my-im"}}
+	if err := cfg.Validate(); err == nil {
+		t.Fatal("expected message ID segment size validation error")
+	}
+}
+
+func TestLoadRejectsNegativeMessageIDSegmentSize(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "config.yaml")
+	body := []byte("app:\n  name: my-im\nmysql:\n  host: localhost\n  user: u\n  db_name: my_im\nmessage_id:\n  segment_size: -1\nredis:\n  addr: localhost:6379\nrabbitmq:\n  url: amqp://guest:guest@localhost/\njwt:\n  secret: 0123456789abcdef0123456789abcdef\n")
+	if err := os.WriteFile(path, body, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := Load(path); err == nil {
+		t.Fatal("expected negative message ID segment size error")
 	}
 }

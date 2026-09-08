@@ -19,6 +19,7 @@ import (
 	authtoken "my-im/internal/auth"
 	"my-im/internal/config"
 	"my-im/internal/infra"
+	"my-im/internal/messageid"
 	"my-im/internal/migrate"
 	"my-im/internal/observability"
 	redisscripts "my-im/internal/redis"
@@ -77,7 +78,20 @@ func run(configPath string) error {
 
 	// 完成端口装配；后续 Service 任务直接依赖这些接口，不再接触连接对象。
 	mysqlRepo := repository.NewMySQLRepository(db, config.Milliseconds(cfg.MySQL.QueryTimeoutMS), metrics.ObserveDB)
-	redisRepo := repository.NewRedisRepo(redisClient)
+	messageIDStore, err := messageid.NewMySQLStoreWithOptions(db, messageid.DefaultNamespace, messageid.MySQLStoreOptions{
+		Timeout: config.Milliseconds(cfg.MySQL.QueryTimeoutMS), Observer: metrics.ObserveDB,
+	})
+	if err != nil {
+		return fmt.Errorf("initialize message ID store: %w", err)
+	}
+	if err := messageIDStore.Validate(context.Background()); err != nil {
+		return fmt.Errorf("validate message ID store: %w", err)
+	}
+	messageIDs, err := messageid.New(messageIDStore, messageid.Options{SegmentSize: cfg.MessageID.SegmentSize})
+	if err != nil {
+		return fmt.Errorf("initialize message ID generator: %w", err)
+	}
+	redisRepo := repository.NewRedisRepo(redisClient, repository.WithMessageIDGenerator(messageIDs))
 	publisher := repository.NewRabbitPublisher(rabbit)
 	_ = publisher
 	tokenManager, err := authtoken.NewManager(cfg.JWT.Secret, cfg.JWT.Issuer,

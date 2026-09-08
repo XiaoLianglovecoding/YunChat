@@ -1,6 +1,6 @@
 # my_IM
 
-这是基于本地开源项目 `E:\IT\IM` 重建的学习型 IM 项目。前端以逐文件复制为基线并统一了 MyIM 品牌；后端保留原项目的分层、数据模型、HTTP/WebSocket 契约与数据边界。工程基础设施、账户鉴权、好友关系以及关系缓存真相链路已经实现，其余业务仍使用 TODO 占位。
+这是基于本地开源项目 `E:\IT\IM` 重建的学习型 IM 项目。前端以逐文件复制为基线并统一了 MyIM 品牌；后端保留原项目的分层、数据模型、HTTP/WebSocket 契约与数据边界。工程基础设施、账户鉴权、好友关系、群管理、关系缓存真相链路以及统一消息 ID 已经实现，其余业务仍使用 TODO 占位。
 
 ## 当前状态
 
@@ -18,7 +18,7 @@
 | 群管理 | 建群/资料、成员增删分页、管理员任免/禁言、转让/退群、解散及异常恢复已实现 |
 | 其余业务逻辑 | 聊天消息、朋友圈和设置仍保留 `TODO[任务编号]` 占位 |
 | 受保护接口 | 全部经过真实 JWT 中间件；无效或缺失 Token 返回 401 |
-| MySQL | 版本化迁移、连接池、事务 Repository；13 张上游表 + 3 张 MyIM 状态/协调表（含群解散墓碑） |
+| MySQL | 版本化迁移、连接池、事务 Repository；13 张上游表 + 4 张 MyIM 状态/协调表（含消息 ID 高水位） |
 | Redis | 6 个单一来源 Lua；好友/黑名单/群成员投影可从 MySQL 重建；显式 noeviction；在线租约带连接所有权 |
 | RabbitMQ | 4 个实际队列、DLQ、Confirm、mandatory、超时与有限重试 |
 | 可观测性 | JSON 日志、Request ID、`/metrics`、本机 pprof |
@@ -44,6 +44,7 @@ my_IM/
 │   ├── internal/
 │   │   ├── api/                 # HTTP Handler、45 个业务路由与剩余 TODO
 │   │   ├── auth|middleware/     # JWT 签发、校验和身份注入
+│   │   ├── messageid/           # MySQL 持久号段与进程内统一消息 ID
 │   │   ├── service/             # 账户、头像、好友、群管理与缓存真相用例
 │   │   ├── repository/          # MySQL、Redis、MQ 端口
 │   │   ├── model/               # 原数据模型
@@ -51,8 +52,8 @@ my_IM/
 │   │   ├── ws|conn|consumer/    # 实时与异步模块边界
 │   │   └── infra|middleware/    # 基础设施与中间件
 │   └── scripts/
-│       ├── migrations/          # 001..013 可升级迁移
-│       └── baseline/            # 最终 16 张业务/协调表结构阅读基线
+│       ├── migrations/          # 001..014 可升级迁移
+│       └── baseline/            # 最终 17 张业务/协调表结构阅读基线
 ├── docs/
 ├── DEVELOPMENT_TASKS.md         # 按依赖顺序拆分的业务任务
 ├── docker-compose.yaml          # MySQL、Redis、RabbitMQ
@@ -150,8 +151,9 @@ go run ./cmd/cachectl -c configs/config.local.yaml -action audit -scope all
 - [群角色与禁言小白教程](docs/GROUP_ROLE_MUTE_TUTORIAL.md)：管理员任免、禁言权限、完整缓存投影与群消息 Lua 校验。
 - [群主转让与退群小白教程](docs/GROUP_TRANSFER_LEAVE_TUTORIAL.md)：三处状态事务、群主退出约束、Redis 修复与 WS 刷新提示。
 - [群解散、上限与恢复小白教程](docs/GROUP_DISSOLVE_RECOVERY_TUTORIAL.md)：幂等解散、消息留存、并发容量、缓存异常恢复与 500 人扇出基准。
+- [消息 ID 生成小白教程](docs/MESSAGE_ID_TUTORIAL.md)：旧算法为什么撞号、MySQL 号段唯一性证明、并发/故障测试与基准。
 - [架构说明](docs/ARCHITECTURE.md)：模块边界、目标数据流和源码/文档漂移。
-- [数据库与中间件契约](docs/DATABASE.md)：16 张业务/协调表、Redis 键、MQ 队列和一致性风险。
+- [数据库与中间件契约](docs/DATABASE.md)：17 张业务/协调表、Redis 键、MQ 队列和一致性风险。
 - [前端复制与联调说明](docs/FRONTEND_COPY.md)：复制范围、环境变量和后端耦合点。
 - [前端 HTTP 类型](frontend/goim-api-types.ts) 与 [WebSocket 类型](frontend/goim-ws-types.ts) 是跨端契约的主要入口。
 

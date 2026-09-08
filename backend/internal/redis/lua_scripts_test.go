@@ -53,3 +53,21 @@ func TestGroupMessageLuaEvaluatesMuteDeadlineAgainstRedisTime(t *testing.T) {
 		t.Error("group message Lua must fail closed when member metadata is missing")
 	}
 }
+
+func TestMessageLuaUsesOnlyExternallyAllocatedIDs(t *testing.T) {
+	for name, script := range map[string]string{
+		"private": luaPrivateMsgCheck,
+		"group":   luaGroupMsgCheck,
+	} {
+		for _, forbidden := range []string{"msg_id_seq:", "milliseconds * 1000", "message ID sequence overflow"} {
+			if strings.Contains(script, forbidden) {
+				t.Errorf("%s message Lua still contains legacy allocator fragment %q", name, forbidden)
+			}
+		}
+		for _, required := range []string{"tonumber(ARGV[1])", "9007199254740991", "invalid externally allocated message ID"} {
+			if !strings.Contains(script, required) {
+				t.Errorf("%s message Lua is missing external-ID guard %q", name, required)
+			}
+		}
+	}
+}

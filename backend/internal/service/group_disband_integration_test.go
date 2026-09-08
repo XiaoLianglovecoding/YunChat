@@ -131,7 +131,7 @@ func TestGroupDisbandDockerIntegration(t *testing.T) {
 	require.NoError(t, cacheTruth.ReconcileGroupMembers(ctx, groupID))
 	require.NoError(t, deleteGroup005Events(ctx, db, groupID))
 
-	messageID := stamp
+	messageID := stamp%8_000_000_000_000_000 + 1
 	messageIDs = append(messageIDs, messageID)
 	_, err = db.ExecContext(ctx, `INSERT INTO group_messages
 		(id,client_msg_id,group_id,sender_id,content,msg_type,group_seq,created_at)
@@ -222,7 +222,7 @@ func TestGroupDisbandDockerIntegration(t *testing.T) {
 	require.Zero(t, redisClient.Exists(ctx, fmt.Sprintf("group_seq:%d", groupID)).Val())
 
 	clientMsgID := fmt.Sprintf("after-disband-%d", stamp)
-	result, err := redisscripts.ExecGroupMsgCheck(redisClient, ctx, groupID, ownerID, clientMsgID)
+	result, err := redisscripts.ExecGroupMsgCheck(redisClient, ctx, groupID, ownerID, clientMsgID, 1)
 	require.NoError(t, err)
 	require.Equal(t, redisscripts.GMErrNotMember, result.ErrCode)
 	require.Zero(t, result.GroupSeq)

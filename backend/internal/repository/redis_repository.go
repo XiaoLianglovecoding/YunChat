@@ -3,6 +3,7 @@ package repository
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"sort"
 	"strconv"
@@ -15,11 +16,30 @@ import (
 )
 
 type RedisRepoImpl struct {
-	rdb *goredis.Client
+	rdb        *goredis.Client
+	messageIDs MessageIDGenerator
 }
 
-func NewRedisRepo(rdb *goredis.Client) *RedisRepoImpl {
-	return &RedisRepoImpl{rdb: rdb}
+// MessageIDGenerator is deliberately tiny so Redis repository tests can use a
+// deterministic fake and the production server can inject messageid.Generator.
+type MessageIDGenerator interface {
+	Next(context.Context) (int64, error)
+}
+
+type RedisRepoOption func(*RedisRepoImpl)
+
+func WithMessageIDGenerator(generator MessageIDGenerator) RedisRepoOption {
+	return func(repo *RedisRepoImpl) { repo.messageIDs = generator }
+}
+
+func NewRedisRepo(rdb *goredis.Client, options ...RedisRepoOption) *RedisRepoImpl {
+	repo := &RedisRepoImpl{rdb: rdb}
+	for _, option := range options {
+		if option != nil {
+			option(repo)
+		}
+	}
+	return repo
 }
 
 // ── 收件箱 / 发件箱 ──
@@ -373,25 +393,39 @@ func (r *RedisRepoImpl) TrimTimelineByTime(ctx context.Context, userID int64, be
 // ── Lua脚本封装 ──
 
 func (r *RedisRepoImpl) ExecPrivateMsgCheck(ctx context.Context, senderID, receiverID int64, clientMsgID string) (*PrivateMsgCheckResult, error) {
-	result, err := redisscripts.ExecPrivateMsgCheck(r.rdb, ctx, senderID, receiverID, clientMsgID)
+	if r.messageIDs == nil {
+		return nil, errors.New("message ID generator is not configured")
+	}
+	messageID, err := r.messageIDs.Next(ctx)
+	if err != nil {
+		return nil, fmt.Errorf("generate private message ID: %w", err)
+	}
+	result, err := redisscripts.ExecPrivateMsgCheck(r.rdb, ctx, senderID, receiverID, clientMsgID, messageID)
 	if err != nil {
 		return nil, err
 	}
 	if result.ErrCode != 0 {
 		return nil, &LuaRuleError{Code: redisscripts.MapLuaErrToClientCode(result.ErrCode)}
 	}
-	return &PrivateMsgCheckResult{MessageID: result.MsgID, Timestamp: result.MsgID / 1000}, nil
+	return &PrivateMsgCheckResult{MessageID: result.MsgID, Timestamp: result.Timestamp}, nil
 }
 
 func (r *RedisRepoImpl) ExecGroupMsgCheck(ctx context.Context, groupID, senderID int64, clientMsgID string) (*GroupMsgCheckResult, error) {
-	result, err := redisscripts.ExecGroupMsgCheck(r.rdb, ctx, groupID, senderID, clientMsgID)
+	if r.messageIDs == nil {
+		return nil, errors.New("message ID generator is not configured")
+	}
+	messageID, err := r.messageIDs.Next(ctx)
+	if err != nil {
+		return nil, fmt.Errorf("generate group message ID: %w", err)
+	}
+	result, err := redisscripts.ExecGroupMsgCheck(r.rdb, ctx, groupID, senderID, clientMsgID, messageID)
 	if err != nil {
 		return nil, err
 	}
 	if result.ErrCode != 0 {
 		return nil, &LuaRuleError{Code: redisscripts.MapGroupLuaErrToClientCode(result.ErrCode)}
 	}
-	return &GroupMsgCheckResult{MessageID: result.MsgID, GroupSeq: result.GroupSeq, Timestamp: result.MsgID / 1000}, nil
+	return &GroupMsgCheckResult{MessageID: result.MsgID, GroupSeq: result.GroupSeq, Timestamp: result.Timestamp}, nil
 }
 
 func (r *RedisRepoImpl) ExecInboxMarkRead(ctx context.Context, userID int64, convID string) (int64, error) {

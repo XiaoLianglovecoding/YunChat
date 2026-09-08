@@ -33,6 +33,7 @@ func TestGroupMuteExpiresWithoutCacheRewrite(t *testing.T) {
 	infoKey := fmt.Sprintf("group_member_info:%d", groupID)
 	dedupKey := fmt.Sprintf("msg_dedup:%d:%s", senderID, clientMsgID)
 	groupSequenceKey := fmt.Sprintf("group_seq:%d", groupID)
+	messageID := int64(9_007_199_254_740_000)
 	t.Cleanup(func() {
 		_ = client.Del(context.Background(), memberKey, infoKey, dedupKey,
 			fmt.Sprintf("msg_dedup:%d:%s", senderID, missingInfoClientMsgID), groupSequenceKey).Err()
@@ -46,7 +47,7 @@ func TestGroupMuteExpiresWithoutCacheRewrite(t *testing.T) {
 		fmt.Sprintf(`{"role":0,"muted_until":%d}`, mutedUntil),
 	).Err())
 
-	beforeExpiry, err := ExecGroupMsgCheck(client, ctx, groupID, senderID, clientMsgID)
+	beforeExpiry, err := ExecGroupMsgCheck(client, ctx, groupID, senderID, clientMsgID, messageID)
 	require.NoError(t, err)
 	require.Equal(t, GMErrMuted, beforeExpiry.ErrCode)
 	dedupExists, err := client.Exists(ctx, dedupKey).Result()
@@ -59,7 +60,7 @@ func TestGroupMuteExpiresWithoutCacheRewrite(t *testing.T) {
 	// Do not rewrite group_member_info. The Lua script must observe Redis TIME
 	// passing the cached deadline and allow the same member automatically.
 	require.Eventually(t, func() bool {
-		afterExpiry, execErr := ExecGroupMsgCheck(client, ctx, groupID, senderID, clientMsgID)
+		afterExpiry, execErr := ExecGroupMsgCheck(client, ctx, groupID, senderID, clientMsgID, messageID)
 		return execErr == nil && afterExpiry.ErrCode == GMErrOK
 	}, 3*time.Second, 50*time.Millisecond)
 
@@ -77,7 +78,7 @@ func TestGroupMuteExpiresWithoutCacheRewrite(t *testing.T) {
 	// The authorization Lua is the final guard and must fail closed before it
 	// writes dedup/sequence state.
 	require.NoError(t, client.HDel(ctx, infoKey, fmt.Sprint(senderID)).Err())
-	missingInfo, err := ExecGroupMsgCheck(client, ctx, groupID, senderID, missingInfoClientMsgID)
+	missingInfo, err := ExecGroupMsgCheck(client, ctx, groupID, senderID, missingInfoClientMsgID, messageID+1)
 	require.NoError(t, err)
 	require.Equal(t, GMErrNotMember, missingInfo.ErrCode)
 	missingInfoDedupExists, err := client.Exists(ctx,

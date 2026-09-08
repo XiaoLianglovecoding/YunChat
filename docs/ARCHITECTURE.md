@@ -7,7 +7,7 @@
 - 前端：React 19、TypeScript、Vite 8、Tailwind CSS、Zustand、TanStack Query。
 - 后端：Go 1.24、Gin 单体。
 - 数据组件：MySQL 8.4、Redis 7.2、RabbitMQ 3.13。
-- 原代码实际有 7 个 Service、4 个已实现 Consumer、13 张 MySQL 表；MyIM 另增用户消息状态表、缓存协调事件表与群解散墓碑表。
+- 原代码实际有 7 个 Service、4 个已实现 Consumer、13 张 MySQL 表；MyIM 另增用户消息状态表、缓存协调事件表、群解散墓碑表与消息 ID 高水位表。
 - 开发期前后端分离；生产镜像把 `frontend/dist` 交给 Gin 托管。
 
 ## 目标依赖方向
@@ -42,6 +42,7 @@ cmd/server -> api/ws -> service -> repository ports
 | --- | --- | --- |
 | `api` | 账户/头像/好友/群管理 Handler，其余路由 501 | DTO、参数校验、调用 Service、错误映射 |
 | `middleware` | CORS、JWT、请求日志/指标 | JWT、限流、追踪、恢复 |
+| `messageid` | MySQL 持久号段、并发安全统一发号器 | 保证私聊/群聊 ID 全局唯一与浏览器数字精度 |
 | `service` | 账户、头像、好友、群管理、缓存真相用例 | 权限、事务编排、缓存一致性 |
 | `repository` | MySQL/Redis/MQ 接口 | 隔离存储和消息中间件 |
 | `ws` | JWT 升级、单连接替换、心跳租约、好友与群变更事件 | 补齐聊天帧分派和跨实例 fanout |
@@ -57,7 +58,8 @@ cmd/server -> api/ws -> service -> repository ports
 客户端 msg
   -> WebSocket 鉴权与参数校验
   -> CacheTruthService：按 loaded marker 从 MySQL 补齐双方好友/黑名单投影
-  -> Redis Lua：好友/黑名单、去重、ID
+  -> 统一 Generator：从 MySQL 持久号段取得 serverMsgID
+  -> Redis Lua：好友/黑名单、去重、独立 timestamp
   -> RabbitMQ private_msg_persist
   -> Consumer 幂等处理
        ├── 双方 inbox / conv_list / unread
@@ -70,7 +72,8 @@ cmd/server -> api/ws -> service -> repository ports
 ```text
 客户端 msg
   -> CacheTruthService：缺失时从 MySQL 补齐群成员/角色/禁言投影
-  -> Redis Lua：成员/禁言、去重、消息 ID、group_seq
+  -> 统一 Generator：从同一个 MySQL 持久号段取得 serverMsgID
+  -> Redis Lua：成员/禁言、去重、独立 timestamp、group_seq
   -> RabbitMQ group_msg_fanout
   -> Consumer 幂等处理
        ├── 群 outbox
@@ -78,6 +81,12 @@ cmd/server -> api/ws -> service -> repository ports
        ├── MySQL group_messages
        └── 在线成员推送
 ```
+
+### 消息 ID
+
+私聊和群聊共享 `message_id_allocators(namespace='message')`。各实例通过 MySQL 行锁事务预留一个默认含 65,536 个 ID 的互不相交号段，热路径只在本地互斥区内递增。号段提交后永不回收，所以实例崩溃只产生空洞；算法不读系统时间、也不读 Redis，时钟回拨和 Redis 恢复都不能复用 ID。
+
+消息 ID 限制在 JavaScript 安全整数 `2^53-1` 以内，只表示身份。Lua 单独返回 Redis 毫秒时间，群 Lua 另分配当前 Redis 状态内的单群 `group_seq`，其跨恢复规则由 MSG-007 完成。多实例持有不同号段时，ID 不保证按发送时间全局递增；Redis `TIME` 也可能回拨，因此后续同步不能把二者直接当作不会回退的到达序号。MSG-004 必须增加持久单调同步水位或证明等价协议。完整证明与基准见 `docs/MESSAGE_ID_TUTORIAL.md`。
 
 ### 朋友圈
 
@@ -243,11 +252,11 @@ Reconciler 对已删除群读取空成员真相，原子清理成员 Set/Hash、
 | 旧文档说法 | 实际源码 |
 | --- | --- |
 | 8 个服务、3 个消费者 | 7 个服务、4 个已实现消费者 |
-| `msg_id_global` | `msg_id_seq:{Unix毫秒}`，ID 为毫秒值乘 1000 加序号 |
+| `msg_id_global` | MySQL `message_id_allocators` 持久号段；私聊、群聊共用统一生成器 |
 | `group_list:{uid}` | `user_groups:{uid}` |
 | `dedup:{convID}:{clientMsgID}` | `msg_dedup:{senderID}:{clientMsgID}` |
 | `group_read_pos:{uid}:{gid}` | `group_read_pos:{uid}` Hash，field 是 convID |
-| Lua 同时写收件箱/未读 | 当前消息 Lua 主要做检查、去重和 ID；Consumer 写收件箱 |
+| Lua 同时写收件箱/未读 | 当前消息 Lua 做规则检查、去重、时间戳/群序号；统一 ID 在调用 Lua 前生成，Consumer 写收件箱 |
 | 所有写都 Redis 优先、MQ 落库 | 账户、好友、群组、动态主体、评论、设置大量同步写 MySQL |
 | Go/TS WebSocket 类型已同步 | 已同步 friendApply/friendAccepted/presence 和 groupAdded/groupRemoved/groupUpdated 常量与联合类型 |
 
@@ -256,9 +265,9 @@ Reconciler 对已删除群读取空成员真相，原子清理成员 Set/Hash、
 - 私聊 Lua 所需 `blacklist:{uid}` 由业务 fast path 与协调事件共同维护，并检查双向拉黑。
 - 群成员 Set、角色/禁言到期时间 Hash 与用户反向群集合可以从 MySQL 原子重建；Lua 用 Redis TIME 判断禁言是否到期。
 - Redis 数据丢失后会启动预热或按需回源，并可用 `cachectl` 重建/巡检。
+- 旧消息 ID 算法已删除；MySQL 持久号段能承受多实例、时钟回拨和 Redis 恢复，且时间戳已与 ID 解耦。
 
 仍需后续任务处理：
 - `comment_persist` 因没有 Publisher/Consumer 已从 MyIM 拓扑删除，评论采用同步 MySQL 写。
 - 外置 Lua 已删除，`internal/redis/lua_*.go` 是唯一来源。
-- `millis*1000+同毫秒序号` 在单毫秒超过 1000 条时可能碰撞，必须由 MSG-000 替换。
 - 原 Dockerfile 构建 `./cmd`，真实入口是 `./cmd/server`；本骨架已修正。

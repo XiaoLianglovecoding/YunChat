@@ -15,12 +15,17 @@ type Config struct {
 	App           AppConfig           `yaml:"app"`
 	Server        ServerConfig        `yaml:"server"`
 	MySQL         MySQLConfig         `yaml:"mysql"`
+	MessageID     MessageIDConfig     `yaml:"message_id"`
 	Redis         RedisConfig         `yaml:"redis"`
 	RabbitMQ      RabbitMQConfig      `yaml:"rabbitmq"`
 	Observability ObservabilityConfig `yaml:"observability"`
 	JWT           JWTConfig           `yaml:"jwt"`
 	File          FileConfig          `yaml:"file"`
 	Moment        MomentConfig        `yaml:"moment"`
+}
+
+type MessageIDConfig struct {
+	SegmentSize int64 `yaml:"segment_size"`
 }
 
 type AppConfig struct {
@@ -163,6 +168,9 @@ func (cfg *Config) applyDefaults() {
 	if cfg.MySQL.ConnMaxIdleTimeMS <= 0 {
 		cfg.MySQL.ConnMaxIdleTimeMS = 60000
 	}
+	if cfg.MessageID.SegmentSize == 0 {
+		cfg.MessageID.SegmentSize = 65_536
+	}
 	if cfg.Redis.DialTimeoutMS <= 0 {
 		cfg.Redis.DialTimeoutMS = 3000
 	}
@@ -250,6 +258,9 @@ func (cfg Config) Validate() error {
 	}
 	if cfg.MySQL.MaxIdleConns > cfg.MySQL.MaxOpenConns {
 		return fmt.Errorf("mysql.max_idle_conns must not exceed max_open_conns")
+	}
+	if cfg.MessageID.SegmentSize < 1 || cfg.MessageID.SegmentSize > 1_000_000 {
+		return fmt.Errorf("message_id.segment_size must be between 1 and 1000000")
 	}
 	if !strings.HasPrefix(cfg.Server.WSPath, "/") || !strings.HasPrefix(cfg.Observability.MetricsPath, "/") {
 		return fmt.Errorf("server.ws_path and observability.metrics_path must start with /")
